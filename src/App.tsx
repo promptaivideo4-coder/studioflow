@@ -4,7 +4,8 @@ import {MENS_LOYALTY,MENS_STAFF} from './lib/keshkraft';
 import React, { useState, useEffect, useRef, useCallback, lazy, Suspense } from 'react';
 import type { Session } from '@supabase/supabase-js';
 import { useAuthSession } from './lib/useAuthSession';
-import { hasAuthCallbackFragment, hasAuthCallbackQuery } from './lib/authEntry';
+import { appendAuthErrorParams, clearOAuthIntent, hasAuthCallbackFragment, hasAuthCallbackQuery, hasAuthErrorParams, readAuthUrlError, readOAuthIntent } from './lib/authEntry';
+import { isBillingInterval, isPricingPlanId, pricingResumePath } from './lib/nexoraPricing';
 import { workspaceSnapshot, sameWorkspace, mergeWorkspace, revisionConflict, conflictMessage, type ConflictChoice } from './lib/workspaceSync';
 import { useCustomerProfile } from './components/customer/useCustomerProfile';
 import { applyWebsiteFavicon, websiteFavicon } from './lib/websiteFavicon';
@@ -107,15 +108,42 @@ function Application() {
  const isLoginRoute=/^\/login\/?$/.test(location.pathname);
  // Legacy root auth/create/owner/panel links keep working; new public links use /login explicitly.
  const reservedRootEntry=customer||recovery||!!ownerSlug||!!entryTemplate||createTemplate||new URLSearchParams(location.search).has('panel');
- const authEntry=isLoginRoute||reservedRootEntry||hasAuthCallbackQuery(location.search)||hasAuthCallbackFragment(location.hash);
+ const [authCallbackEntry]=useState(()=>hasAuthCallbackQuery(location.search)||hasAuthCallbackFragment(location.hash));
+ const authEntry=isLoginRoute||reservedRootEntry||authCallbackEntry||hasAuthCallbackQuery(location.search)||hasAuthCallbackFragment(location.hash);
  const publicHomeRoute=location.pathname==='/'&&!slug&&!customer&&!customerApp&&!inviteEntry&&!recovery&&!ownerSlug&&!entryTemplate&&!createTemplate&&!authEntry;
+ const [oauthIntentPending,setOauthIntentPending]=useState(()=>location.pathname==='/'&&!slug&&!customer&&!customerApp&&!inviteEntry&&!ownerSlug&&!createTemplate&&authCallbackEntry&&Boolean(readOAuthIntent()));
+ const pricingParams=new URLSearchParams(location.search);
+ const pricingPlanId=pricingParams.get('pricing_plan');
+ const pricingBilling=pricingParams.get('billing_interval');
  const onRecovery=useCallback(()=>{try{sessionStorage.setItem('studioflow_recovery','1');}catch{}setRecovery(true);},[]);
  const {session,ready:authReady,error:authError}=useAuthSession(onRecovery);
+ const pricingRedirectTarget=session&&!recovery&&isPricingPlanId(pricingPlanId)?pricingResumePath({planId:pricingPlanId,billingInterval:isBillingInterval(pricingBilling)?pricingBilling:'annual'}):'';
  const [googleOAuthStatus,setGoogleOAuthStatus]=useState<'idle'|'processing'|'error'>('idle');
  const [googleOAuthMessage,setGoogleOAuthMessage]=useState('');
  const [googleOAuthRetry,setGoogleOAuthRetry]=useState(0);
  useEffect(()=>{
   if(!authReady)return;
+  const intent=readOAuthIntent();
+  if(location.pathname==='/'&&!slug&&!customer&&!customerApp&&!inviteEntry&&!ownerSlug&&!createTemplate&&authCallbackEntry&&intent){
+   clearOAuthIntent();
+   if(intent.path!=='/'){
+    const nextTarget=!session&&hasAuthErrorParams(location.search,location.hash)?appendAuthErrorParams(intent.path,location.search,location.hash):intent.path;
+    location.replace(nextTarget);
+    return;
+   }
+  }
+  setOauthIntentPending(false);
+  if(intent&&(isLoginRoute||customerApp||customer||slug||inviteEntry||ownerSlug||createTemplate||session||!authCallbackEntry)){
+   clearOAuthIntent();
+  }
+ },[authReady,session?.user?.id,slug,customer,customerApp,inviteEntry,ownerSlug,createTemplate,isLoginRoute,authCallbackEntry]);
+ useEffect(()=>{
+  if(!authReady||oauthIntentPending||!pricingRedirectTarget)return;
+  clearOAuthIntent();
+  location.replace(pricingRedirectTarget);
+ },[authReady,oauthIntentPending,pricingRedirectTarget]);
+ useEffect(()=>{
+  if(!authReady||oauthIntentPending)return;
   if(!session){setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');return;}
   const intent=readGoogleOAuthIntent();
   if(!intent){setGoogleOAuthStatus('idle');return;}
@@ -146,41 +174,43 @@ function Application() {
       source:'studioflow',
      };
      const updated=await supabase.auth.updateUser({data:metadata});
-     if(updated.error)throw updated.error;
+     if(updated.error)throw new Error(updated.error.message);
      const profile=await supabase.rpc('studioflow_customer_update_details',{
       p_name:fullName,
       p_phone:intent.whatsappNumber,
       p_whatsapp:intent.whatsappNumber,
       p_birth_date:intent.dateOfBirth,
      });
-     if(profile.error)throw profile.error;
+     if(profile.error)throw new Error(profile.error.message);
      if(intent.referralCode){
       const referral=await supabase.rpc('studioflow_customer_claim_ref',{p_code:intent.referralCode});
-      if(referral.error)throw referral.error;
+      if(referral.error)throw new Error(referral.error.message);
+      if(typeof window!=='undefined')window.dispatchEvent(new Event('nexora-customer-rewards-updated'));
      }
     }else{
      if(!fullName||!intent.salonName.trim())throw new Error('Google sign-up is missing your name or salon name. Please sign out and complete salon sign-up again.');
      const updated=await supabase.auth.updateUser({data:{full_name:fullName,salon_name:intent.salonName.trim(),source:'studioflow'}});
-     if(updated.error)throw updated.error;
+     if(updated.error)throw new Error(updated.error.message);
      const profile=await supabase.from('profiles').update({full_name:fullName,salon_name:intent.salonName.trim()}).eq('id',session.user.id).select('id').maybeSingle();
-     if(profile.error)throw profile.error;
+     if(profile.error)throw new Error(profile.error.message);
      if(!profile.data)throw new Error('Your salon profile was not found. Please retry Google sign-up.');
     }
    }
    clearGoogleOAuthIntent();
    if(active){setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');}
   })().catch(error=>{
-   if(active){setGoogleOAuthStatus('error');setGoogleOAuthMessage(error instanceof Error?error.message:'Google sign-in could not finish. Please retry.');}
+   const msg=error instanceof Error?error.message:(typeof (error as {message?:unknown})?.message==='string'&&(error as {message:string}).message)||'Google sign-in could not finish. Please retry.';
+   if(active){setGoogleOAuthStatus('error');setGoogleOAuthMessage(msg);}
   });
   return()=>{active=false;};
- },[session?.user?.id,authReady,googleOAuthRetry]);
+ },[session?.user?.id,authReady,oauthIntentPending,googleOAuthRetry]);
  useCustomerWelcomeDelivery(session);
  useEffect(()=>{captureReferral();clearReferralAuthQueryParams();},[]);
  useEffect(()=>{
   if(slug||customer||customerApp||inviteEntry)return;
   applyPublicSeoMetadata(authEntry?NEXORA_LOGIN_SEO:NEXORA_HOME_SEO);
  },[slug,customer,customerApp,inviteEntry,authEntry]);
- useEffect(()=>{if(!session){setAccount(null);setError('');return;}if(slug||customer||customerApp||recovery||publicHomeRoute)return;let active=true;setAccount(null);setError('');
+ useEffect(()=>{if(!session){setAccount(null);setError('');return;}if(slug||customer||customerApp||recovery||publicHomeRoute||oauthIntentPending||pricingRedirectTarget||googleOAuthStatus!=='idle')return;let active=true;setAccount(null);setError('');
  (async()=>{
   if(ownerSlug){const target=await withTimeout(supabase.from('studioflow_websites').select('slug').eq('slug',ownerSlug).eq('owner_id',session.user.id).maybeSingle(),15000,'Checking this salon website');if(target.error)throw target.error;if(!target.data)throw new Error('Sign in with the owner account for this salon to manage its website.');}
   // Bounded, self-healing bootstrap: the RPC is tried first, the already-saved
@@ -214,7 +244,8 @@ function Application() {
   ]);
   if(active){setTemplates(catalogue.templates.some(t=>t.id==='mens_hair_studio')?catalogue.templates:[...catalogue.templates,CATEGORY_TEMPLATES.mens_hair_studio]);setAccount({...bootstrap.account,identity:identity.error?null:identity.data});try{localStorage.removeItem('studioflow_pending_ref');}catch{}}
  })().catch(e=>{if(active)setError(e.message||'Could not load your account');});return()=>{active=false;};
- },[session?.user?.id,retry,slug,customer,customerApp,recovery,skipReferral,ownerSlug,publicHomeRoute]);
+ },[session?.user?.id,retry,slug,customer,customerApp,recovery,skipReferral,ownerSlug,publicHomeRoute,oauthIntentPending,pricingRedirectTarget,googleOAuthStatus]);
+ if(oauthIntentPending||pricingRedirectTarget)return <Loading text="Continuing to your destination…" />;
  if(googleOAuthStatus==='processing')return <Loading text="Finishing your Google sign-in…" />;
  if(googleOAuthStatus==='error')return <main className="min-h-screen flex items-center justify-center bg-[#f9f9ff] px-4"><section className="workspace-card w-full max-w-lg"><h1 className="text-2xl font-bold mb-2">Finish Google sign-in</h1><p role="alert" className="mb-4 rounded-lg bg-amber-50 p-3 text-amber-900">{googleOAuthMessage}</p><div className="flex flex-wrap gap-3"><button className="primary-action" onClick={()=>setGoogleOAuthRetry(n=>n+1)}>Retry</button><button className="secondary-action" onClick={()=>void supabase.auth.signOut()}>Sign out</button></div></section></main>;
  if(recovery&&session)return <AuthPage recovery onRecovered={()=>{setRecovery(false);setRetry(r=>r+1);}} />;
@@ -225,7 +256,8 @@ function Application() {
  if(entryTemplate&&!createTemplate&&!isLoginRoute&&!slug&&!customer&&!recovery)return <TemplateEntry templateId={entryTemplate.id} />;
  if(publicHomeRoute)return <PublicHomepage authenticated={Boolean(session)} />;
  if(!authReady)return <Loading text="Checking your session…" />;
- if(!session)return authEntry?<>{authError&&<p role="alert" className="p-4">{authError}</p>}<div className="bg-white border-b px-4 py-3 text-center text-sm">Looking for a salon appointment? <a className="text-violet-600 font-semibold" href="/?app=1">Open Nexora Customer App →</a></div><AuthPage /></>:<PublicHomepage />;
+ const urlAuthError=readAuthUrlError(location.search,location.hash);
+ if(!session)return authEntry?<>{authError&&authError!==urlAuthError&&<p role="alert" className="p-4">{authError}</p>}<div className="bg-white border-b px-4 py-3 text-center text-sm">Looking for a salon appointment? <a className="text-violet-600 font-semibold" href="/?app=1">Open Nexora Customer App →</a></div><AuthPage /></>:<PublicHomepage />;
  if(customer)return <CustomerBookings session={session} />;
  if(error)return <main className="p-8"><h1 className="text-2xl font-bold">Account could not load</h1><p role="alert" className="my-4">{error.includes('database') || error.includes('connection') ? 'There was a database connection issue. Please check your internet or try again later.' : error}</p><button className="primary-action" onClick={()=>setRetry(r=>r+1)}>Retry</button><button className="secondary-action ml-3" onClick={()=>void supabase.auth.signOut()}>Sign out</button><button className="secondary-action ml-3" onClick={()=>{localStorage.removeItem('studioflow_pending_ref');const url=new URL(location.href);url.searchParams.delete('ref');history.replaceState(null,'',url);setSkipReferral(true);setRetry(r=>r+1);}}>Continue without pending referral</button></main>;
  if(!account||account.user_id!==session.user.id)return <AccountLoading profileState={account?'user-mismatch':'loading'} userId={session.user.id} onRetry={()=>setRetry(r=>r+1)} onSignOut={()=>void supabase.auth.signOut()} />;
@@ -531,7 +563,9 @@ function PublishedWebsite({slug,session}:{key?:React.Key;slug:string;session:Ses
  const [showBookings,setShowBookings]=useState(false);
  const [site,setSite]=useState<any>(null);const [error,setError]=useState('');const [retry,setRetry]=useState(0);const [countdown, setCountdown] = useState(0);
  const [devFallbackTemplate,setDevFallbackTemplate]=useState<BusinessTypeId|null>(null);
- const [authMode,setAuthMode]=useState<'signin'|'signup'|null>(null);
+ const [authMode,setAuthMode]=useState<'signin'|'signup'|null>(()=>!session&&hasAuthErrorParams(location.search||'',location.hash||'')?'signin':null);
+ const siteQueryParams=new URLSearchParams(location.search||'');
+ const stayOnSitePath=siteQueryParams.has('site')||siteQueryParams.has('s')||siteQueryParams.has('subdomain')||(Boolean(location.pathname)&&location.pathname.replace(/^\/+|\/+$/g,'').toLowerCase()===slug.toLowerCase())?`/?site=${encodeURIComponent(slug)}`:'/';
 
   useEffect(() => {
     if (!error) {
@@ -592,5 +626,5 @@ function PublishedWebsite({slug,session}:{key?:React.Key;slug:string;session:Ses
  if(!site)return <Loading text="Loading salon website…" />;
  const book=async(apt:Appointment)=>{if(!session){setAuthMode('signin');throw new Error('Please log in or create a customer account to continue your booking.');}const isAura=site?.profile?.businessType==='unisex_salon';const isMens=site?.profile?.businessType==='mens_hair_studio';const rpc=isMens?'studioflow_mens_book':apt.branchId?(apt.couponCode?'studioflow_branch_coupon_book':'studioflow_branch_book'):(apt.couponCode?(isAura?'studioflow_aura_coupon_book':'studioflow_coupon_book'):'studioflow_book');const {data,error}=await supabase.rpc(rpc,{p_slug:slug,p_request:apt});if(error)throw error;return data?.payload||data;};
  const content=normalizeWorkspace({...site,extras:{gallery:site.gallery,policies:site.policies,whiteLabel:site.branding}});
- return <><div className="bg-white border-b px-4 py-2 flex justify-between gap-3 text-xs"><a className="text-violet-600 font-semibold" href={'/?app=1&site='+encodeURIComponent(slug)}>Open this salon in Nexora App ↗</a><a className="text-violet-600" href="/?app=1&tab=bookings">My Bookings</a></div>{showBookings&&<SalonBookingsDialog profile={{...content.profile,subdomain:slug}} onClose={()=>setShowBookings(false)}/>} {authMode&&<div className="fixed inset-0 z-[100] bg-black/50 p-4 flex items-center justify-center" onClick={()=>setAuthMode(null)}><section role="dialog" aria-modal="true" aria-label="Customer account" className="bg-white text-slate-900 rounded-2xl w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4" onClick={e=>e.stopPropagation()}><button className="secondary-action mb-3" onClick={()=>setAuthMode(null)}>Close</button>{session?<Suspense fallback={<p role="status">Loading account settings…</p>}><WebsiteCustomerAccount session={session} account={customerAccount}/></Suspense>:<AuthPage key={authMode} compact customerMode initialMode={authMode} returnSlug={slug}/>}</section></div>}<SalonWebsitePreview key={slug} customerSignedIn={!!session} customerName={customerAccount.profile.full_name||session?.user.user_metadata?.full_name||'My account'} customerPhotoUrl={customerAccount.photoUrl} onCustomerAccount={mode=>setAuthMode(mode||'signin')} profile={{...content.profile,subdomain:slug}} services={normalizeServices<SalonService>(content.services,'published site services')} stylists={content.stylists} gallery={content.extras.gallery} policies={site.policies} branding={site.branding} loyaltyConfig={site.loyaltyConfig} onAddAppointment={book} readOnly live /></>;
+ return <><div className="bg-white border-b px-4 py-2 flex justify-between gap-3 text-xs"><a className="text-violet-600 font-semibold" href={'/?app=1&site='+encodeURIComponent(slug)}>Open this salon in Nexora App ↗</a><a className="text-violet-600" href="/?app=1&tab=bookings">My Bookings</a></div>{showBookings&&<SalonBookingsDialog profile={{...content.profile,subdomain:slug}} onClose={()=>setShowBookings(false)}/>} {authMode&&<div className="fixed inset-0 z-[100] bg-black/50 p-4 flex items-center justify-center" onClick={()=>setAuthMode(null)}><section role="dialog" aria-modal="true" aria-label="Customer account" className="bg-white text-slate-900 rounded-2xl w-full max-w-lg max-h-[90dvh] overflow-y-auto p-4" onClick={e=>e.stopPropagation()}><button className="secondary-action mb-3" onClick={()=>setAuthMode(null)}>Close</button>{session?<Suspense fallback={<p role="status">Loading account settings…</p>}><WebsiteCustomerAccount session={session} account={customerAccount}/></Suspense>:<AuthPage key={authMode} compact customerMode initialMode={authMode} returnSlug={slug} redirectPathOverride={stayOnSitePath}/>}</section></div>}<SalonWebsitePreview key={slug} customerSignedIn={!!session} customerName={customerAccount.profile.full_name||session?.user.user_metadata?.full_name||'My account'} customerPhotoUrl={customerAccount.photoUrl} onCustomerAccount={mode=>setAuthMode(mode||'signin')} profile={{...content.profile,subdomain:slug}} services={normalizeServices<SalonService>(content.services,'published site services')} stylists={content.stylists} gallery={content.extras.gallery} policies={site.policies} branding={site.branding} loyaltyConfig={site.loyaltyConfig} onAddAppointment={book} readOnly live /></>;
 }

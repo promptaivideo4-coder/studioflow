@@ -13,9 +13,14 @@ export function useAuthSession(onRecovery?: () => void) {
     };
     const {data} = supabase.auth.onAuthStateChange((event, session) => {
       if (!active) return;
-      authChanged = true;
       if (event === 'PASSWORD_RECOVERY') onRecovery?.();
-      accept(session);
+      // Only treat real auth transitions or an authenticated INITIAL_SESSION as
+      // authoritative; an unauthenticated INITIAL_SESSION must not mask a URL
+      // exchange / OAuth callback error returned by getSession().
+      if (event !== 'INITIAL_SESSION' || session?.user?.id) {
+        authChanged = true;
+        accept(session);
+      }
     });
     // Never let a delayed cached session resurrect an account after SIGNED_OUT.
     void withTimeout(Promise.resolve().then(() => supabase.auth.getSession()), 15000, 'Checking your session')

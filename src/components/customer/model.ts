@@ -4,7 +4,7 @@ export type Stylist={workGallery?:import('../../types').StaffWorkPhoto[];experti
 export type Salon={slug:string;owner_id:string;demoTemplateId?:string;content:{profile:any;services?:Service[];stylists?:Stylist[];gallery?:string[];policies?:Record<string,unknown>;loyaltyConfig?:any}};
 export function isSalon(value: unknown): value is Salon {return isRecord(value)&&typeof value.slug==='string'&&typeof value.owner_id==='string'&&isRecord(value.content)&&isRecord(value.content.profile);}
 export type Booking={id:string;owner_id:string;status:string;branch_id?:string|null;starts_at?:string;ends_at?:string;hold_expires_at?:string;payload:any};
-export type Slot={time:string;label:string;stylistId:string;branchId?:string;branchName?:string};
+export type Slot={time:string;label:string;available?:boolean;stylistId:string;branchId?:string;branchName?:string};
 export const menu=(s:Salon)=>Array.isArray(s?.content?.services)?s?.content?.services:[];
 export const staff=(s:Salon)=>Array.isArray(s?.content?.stylists)?s?.content?.stylists:[];
 export const rupees=(n:unknown)=>'₹'+Number(n||0).toLocaleString('en-IN',{maximumFractionDigits:2});
