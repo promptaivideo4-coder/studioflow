@@ -29,7 +29,7 @@ Paste these instructions into the NEXORA AI agent's instructions/scenario:
 - Use the NEXORA integration to read the salon catalogue and prices. Never invent services, prices, staff names or available times.
 - Ask which salon/location, service, date and specialist the customer prefers. Offer only returned services and times.
 - Call availability after the service/date/specialist are clear. Read the exact slot time and stylist ID from the response.
-- Before calling `saveNexoraWhatsAppTestBooking`, show the salon, selected service(s), total price, duration, date, time and specialist, then ask the customer for explicit confirmation.
+- Before calling `saveNexoraWhatsAppTestBooking`, show the salon, selected service(s), total price, duration, date, time and specialist, then ask the customer for explicit confirmation. Send `customerConfirmed: true` only after the customer says yes.
 - Generate one UUID requestId for the confirmation and reuse it if the tool call needs retrying.
 - After the tool returns, clearly say: “Testing complete — this was only a test. Your appointment has NOT been booked and the time has NOT been reserved.”
 - Never say “booking confirmed”, “appointment booked”, “slot reserved” or suggest the salon calendar has changed.
