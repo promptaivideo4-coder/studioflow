@@ -47,6 +47,7 @@ const go = (url: string) => {
 
 const { supabase, captureReferral } = await import('../src/lib/supabase');
 const { captureCustomerReferral, clearCustomerReferral } = await import('../src/lib/customerReferral');
+const { readGoogleOAuthIntent, clearGoogleOAuthIntent } = await import('../src/lib/googleOAuth');
 const { AuthPage } = await import('../src/components/AuthPage');
 const { useAuthSession } = await import('../src/lib/useAuthSession');
 
@@ -76,8 +77,16 @@ let validRefResult = true;
   return { data: validRefResult, error: null };
 };
 
+const textOf = (node: any): string =>
+  typeof node === 'string'
+    ? node
+    : Array.isArray(node)
+      ? node.map(textOf).join('')
+      : node && Array.isArray(node.children)
+        ? node.children.map(textOf).join('')
+        : '';
 const findButton = (root: any, label: string) =>
-  root.findAllByType('button').find((b: any) => b.children.join('') === label);
+  root.findAllByType('button').find((b: any) => textOf(b).trim() === label);
 
 // 1. Visibility across modes
 go('https://owner.test/login');
@@ -114,13 +123,29 @@ assert.equal(readOAuthIntent()?.flow, 'owner');
 await act(async () => view.unmount());
 clearOAuthIntent();
 
-// 3. Owner signup with edited referral validates and stores studioflow_pending_ref
+const findInput = (root: any, pred: (props: any) => boolean) =>
+  root.findAllByType('input').find((i: any) => pred(i.props));
+const fillOwnerSignup = async (root: any, name = 'Priya Sharma', salon = 'Glow Salon') => {
+  await act(async () => findInput(root, (p) => p.autoComplete === 'name').props.onChange({ target: { value: name } }));
+  await act(async () => findInput(root, (p) => p.maxLength === 150 && p.autoComplete !== 'name').props.onChange({ target: { value: salon } }));
+};
+const fillCustomerSignup = async (root: any, name = 'Asha Verma', dob = '1996-05-14', wa = '9876543210') => {
+  await act(async () => findInput(root, (p) => p.autoComplete === 'name').props.onChange({ target: { value: name } }));
+  await act(async () => findInput(root, (p) => p.type === 'date').props.onChange({ target: { value: dob } }));
+  await act(async () => findInput(root, (p) => p['aria-label'] === 'WhatsApp number').props.onChange({ target: { value: wa } }));
+};
+
+// 3. Owner signup requires name/salon, validates edited referral, and stores studioflow_pending_ref
 go('https://owner.test/login?auth=signup&ref=OLDREF1');
 oauthCalls.length = 0;
 rpcCalls.length = 0;
 await act(async () => {
   view = create(<AuthPage />);
 });
+await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
+assert.equal(oauthCalls.length, 0, 'Owner Google signup blocks missing name/salon');
+assert.match(view.root.findByProps({ role: 'status' }).children.join(''), /Enter your full name/);
+await fillOwnerSignup(view.root);
 const ownerRefInput = view.root.findAllByType('input').find((i: any) => i.props.maxLength === 32);
 await act(async () => ownerRefInput.props.onChange({ target: { value: 'partner99' } }));
 await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
@@ -128,8 +153,10 @@ assert.deepEqual(rpcCalls[0], ['studioflow_validate_ref', { p_code: 'PARTNER99' 
 assert.equal(captureReferral(), 'PARTNER99');
 assert.ok(!location.search.includes('ref='), 'URL ?ref is cleaned before redirect');
 assert.equal(oauthCalls[0].options.redirectTo, 'https://owner.test/login');
+assert.equal(readGoogleOAuthIntent()?.salonName, 'Glow Salon');
 await act(async () => view.unmount());
 localMap.delete('studioflow_pending_ref');
+clearGoogleOAuthIntent();
 
 // Invalid referral blocks Google OAuth and keeps button interactive
 go('https://owner.test/login?auth=signup');
@@ -138,6 +165,7 @@ validRefResult = false;
 await act(async () => {
   view = create(<AuthPage />);
 });
+await fillOwnerSignup(view.root);
 await act(async () =>
   view.root.findAllByType('input').find((i: any) => i.props.maxLength === 32).props.onChange({ target: { value: 'BADCODE1' } }),
 );
@@ -154,20 +182,24 @@ oauthCalls.length = 0;
 await act(async () => {
   view = create(<AuthPage />);
 });
+await fillOwnerSignup(view.root);
 await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
 assert.equal(oauthCalls[0].options.redirectTo, 'https://owner.test/?template=hair_salon&create=1');
 await act(async () => view.unmount());
+clearGoogleOAuthIntent();
 
 go('https://owner.test/login?auth=signup&pricing_plan=grow&billing_interval=annual');
 oauthCalls.length = 0;
 await act(async () => {
   view = create(<AuthPage />);
 });
+await fillOwnerSignup(view.root);
 await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
-assert.equal(oauthCalls[0].options.redirectTo, 'https://owner.test/login?pricing_plan=grow&billing_interval=annual');
+assert.equal(oauthCalls[0].options.redirectTo, 'https://owner.test/pricing?resume_plan=grow&billing_interval=annual');
 await act(async () => view.unmount());
+clearGoogleOAuthIntent();
 
-// 5. Customer App context preservation + edited referral
+// 5. Customer App context preservation + edited referral (kept in googleOAuth intent, cleared from early bridge)
 go('https://salon.test/?app=1&site=royal-cuts&tab=explore&auth=signin');
 oauthCalls.length = 0;
 await act(async () => {
@@ -177,6 +209,7 @@ await act(async () => findButton(view.root, 'Continue with Google').props.onClic
 assert.equal(oauthCalls[0].options.redirectTo, 'https://salon.test/?app=1&site=royal-cuts&tab=explore');
 assert.equal(readOAuthIntent()?.flow, 'app');
 await act(async () => view.unmount());
+clearGoogleOAuthIntent();
 
 go('https://salon.test/?app=1&auth=signup&customer_ref=FRIEND11');
 oauthCalls.length = 0;
@@ -184,15 +217,18 @@ rpcCalls.length = 0;
 await act(async () => {
   view = create(<AuthPage compact customerMode />);
 });
+await fillCustomerSignup(view.root);
 await act(async () =>
   view.root.findAllByType('input').find((i: any) => i.props.maxLength === 32).props.onChange({ target: { value: 'friend22' } }),
 );
 await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
 assert.deepEqual(rpcCalls[0], ['studioflow_customer_validate_ref', { p_code: 'FRIEND22' }]);
-assert.equal(captureCustomerReferral(), 'FRIEND22');
-assert.equal(oauthCalls[0].options.redirectTo, 'https://salon.test/?app=1&customer_ref=FRIEND22');
+assert.equal(readGoogleOAuthIntent()?.referralCode, 'FRIEND22');
+assert.equal(localMap.get('studioflow_customer_ref'), undefined, 'Early bridge referral stays clear until new Google account confirmed');
+assert.equal(oauthCalls[0].options.redirectTo, 'https://salon.test/?app=1');
 await act(async () => view.unmount());
 clearCustomerReferral();
+clearGoogleOAuthIntent();
 
 // 6. Invitation mode signs out existing sender locally before starting Google OAuth
 go('https://salon.test/?app=1&customer_ref=SENDER12');
@@ -202,12 +238,14 @@ oauthCalls.length = 0;
 await act(async () => {
   view = create(<AuthPage compact customerMode initialMode="signup" invitationMode />);
 });
+await fillCustomerSignup(view.root);
 await act(async () => findButton(view.root, 'Continue with Google').props.onClick());
 assert.deepEqual(events, ['signOut:local', 'signInWithOAuth']);
 assert.equal(oauthCalls[0].options.redirectTo, 'https://salon.test/?app=1&tab=rewards');
-assert.equal(captureCustomerReferral(), 'SENDER12');
+assert.equal(readGoogleOAuthIntent()?.referralCode, 'SENDER12');
 await act(async () => view.unmount());
 clearCustomerReferral();
+clearGoogleOAuthIntent();
 
 // 7. Published salon website redirect override (query, subdomain, SalonBookingsDialog)
 go('https://my-salon.nexorasalon.online/');
