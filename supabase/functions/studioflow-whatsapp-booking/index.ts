@@ -14,7 +14,7 @@ import { createClient } from 'npm:@supabase/supabase-js@2.117.3';
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Headers': 'content-type, x-nexora-booking-key',
+  'Access-Control-Allow-Headers': 'authorization, content-type',
   'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
 };
 
@@ -181,7 +181,7 @@ async function claimTestQuota(
   ownerId: string,
   phoneHash: string,
 ) {
-  const { data, error } = await db.rpc('studioflow_whatsapp_test_rate_limit', {
+  const { data, error } = await db.rpc('private_whatsapp_test_rate_limit', {
     p_owner_id: ownerId,
     p_phone_hash: phoneHash,
     p_max_attempts: 10,
@@ -476,7 +476,9 @@ Deno.serve(async (req: Request) => {
   if (req.method !== 'POST') return json({ ok: false, error: 'POST required.' }, 405);
 
   const expectedKey = Deno.env.get('NEXORA_TAWK_BOOKING_API_KEY') || '';
-  const suppliedKey = req.headers.get('x-nexora-booking-key') || '';
+  const authorization = req.headers.get('authorization') || '';
+  const suppliedKey = authorization.replace(/^Bearer\\s+/i, '').trim();
+  if (!/^Bearer\\s+\\S+$/i.test(authorization)) return json({ ok: false, error: 'Unauthorized.' }, 401);
   if (expectedKey.length < 32) return json({ ok: false, error: 'WhatsApp booking integration is not configured yet.' }, 503);
   if (!constantTimeEqual(expectedKey, suppliedKey)) return json({ ok: false, error: 'Unauthorized.' }, 401);
 
