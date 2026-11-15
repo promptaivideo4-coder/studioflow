@@ -181,9 +181,9 @@ async function claimTestQuota(
   ownerId: string,
   phoneHash: string,
 ) {
-  const { data, error } = await db.rpc('studioflow_edge_rate_limit_claim', {
-    p_bucket_key: 'nexora-whatsapp-test:' + ownerId + ':' + phoneHash,
-    p_window_seconds: 3600,
+  const { data, error } = await db.rpc('studioflow_whatsapp_test_rate_limit', {
+    p_owner_id: ownerId,
+    p_phone_hash: phoneHash,
     p_max_attempts: 10,
   });
   if (error || !data || typeof data !== 'object') return { error: 'Test booking limit is temporarily unavailable.' };
