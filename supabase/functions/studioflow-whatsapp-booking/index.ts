@@ -116,16 +116,15 @@ async function getSalon(db: ReturnType<typeof createClient>, slug: string) {
   return data as { slug: string; owner_id: string; content: JsonRecord };
 }
 
-async function validateBranch(db: ReturnType<typeof createClient>, ownerId: string, branchId: string) {
+async function getActiveBranches(db: ReturnType<typeof createClient>, ownerId: string) {
   const { data, error } = await db
     .from('branches')
     .select('id, name, city')
     .eq('site_id', ownerId)
-    .eq('id', branchId)
     .eq('is_active', true)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as { id: string; name: string; city: string };
+    .order('created_at', { ascending: true });
+  if (error || !Array.isArray(data)) return null;
+  return data as Array<{ id: string; name: string; city: string }>;
 }
 
 async function getAvailableSlots(
@@ -201,12 +200,8 @@ async function handleCatalogue(db: ReturnType<typeof createClient>, body: JsonRe
 
   const services = Array.isArray(salon.content.services) ? salon.content.services as JsonRecord[] : [];
   const stylists = Array.isArray(salon.content.stylists) ? salon.content.stylists as JsonRecord[] : [];
-  const { data: branches } = await db
-    .from('branches')
-    .select('id, name, city')
-    .eq('site_id', salon.owner_id)
-    .eq('is_active', true)
-    .order('created_at', { ascending: true });
+  const branches = await getActiveBranches(db, salon.owner_id);
+  if (!branches) return json({ ok: false, error: 'Salon locations could not be loaded.' }, 503);
 
   return json({
     ok: true,
@@ -231,7 +226,7 @@ async function handleCatalogue(db: ReturnType<typeof createClient>, body: JsonRe
       role: cleanText(person.role || person.roleTitle, 80),
       assignedServices: Array.isArray(person.assignedServices) ? person.assignedServices.map(String) : [],
     })),
-    branches: (branches || []).map((branch: JsonRecord) => ({
+    branches: branches.map((branch) => ({
       id: String(branch.id),
       name: cleanText(branch.name, 120),
       city: cleanText(branch.city, 80),
@@ -246,9 +241,14 @@ async function handleAvailability(db: ReturnType<typeof createClient>, body: Jso
 
   const salon = await getSalon(db, valid.slug);
   if (!salon) return json({ ok: false, error: 'Salon not found or not published.' }, 404);
-  if (valid.branchId && !await validateBranch(db, salon.owner_id, valid.branchId)) {
-    return json({ ok: false, error: 'That salon location is not active.' }, 400);
+  const branches = await getActiveBranches(db, salon.owner_id);
+  if (!branches) return json({ ok: false, error: 'Salon locations could not be loaded.' }, 503);
+  if (branches.length > 1 && !valid.branchId) {
+    return json({ ok: false, error: 'Choose a salon location before checking times.', requiresBranch: true }, 400);
   }
+  const branchId = valid.branchId || (branches.length === 1 ? branches[0].id : undefined);
+  const branch = branches.find((item) => item.id === branchId);
+  if (branchId && !branch) return json({ ok: false, error: 'That salon location is not active.' }, 400);
   const selected = getServiceItems(salon.content, valid.serviceIds);
   if (!selected) return json({ ok: false, error: 'One of the selected services is no longer available.' }, 409);
 
@@ -257,7 +257,7 @@ async function handleAvailability(db: ReturnType<typeof createClient>, body: Jso
     serviceIds: valid.serviceIds,
     date: valid.date,
     stylistId: valid.stylistId,
-    branchId: valid.branchId,
+    branchId,
   });
   if (!slots) return json({ ok: false, error: 'Live availability could not be checked. Please try again.' }, 503);
 
@@ -273,8 +273,8 @@ async function handleAvailability(db: ReturnType<typeof createClient>, body: Jso
       time: slot.time,
       stylistId: slot.stylistId,
       stylistName: cleanText(specialists.find((person) => person?.id === slot.stylistId)?.name, 100),
-      branchId: slot.branchId || valid.branchId || null,
-      branchName: cleanText(slot.branchName || '', 120),
+      branchId: slot.branchId || branchId || null,
+      branchName: cleanText(slot.branchName || branch?.name || '', 120),
     })),
     notice: 'These times were read from the live NEXORA calendar. Checking availability does not reserve a time.',
   });
@@ -295,6 +295,9 @@ async function handleTestBooking(
   const customerPhone = normalizePhone(body.customerPhone);
   const notes = cleanText(body.notes, 500);
 
+  if (body.customerConfirmed !== true) {
+    return json({ ok: false, error: 'Customer confirmation is required before saving a test request.' }, 400);
+  }
   if (!isTime(time)) return json({ ok: false, error: 'Choose a valid available time.' }, 400);
   if (!requestedStylist) return json({ ok: false, error: 'Choose a specialist from the available times.' }, 400);
   if (!isUuid(requestId)) return json({ ok: false, error: 'A valid requestId is required.' }, 400);
@@ -302,8 +305,14 @@ async function handleTestBooking(
 
   const salon = await getSalon(db, valid.slug);
   if (!salon) return json({ ok: false, error: 'Salon not found or not published.' }, 404);
-  const branch = valid.branchId ? await validateBranch(db, salon.owner_id, valid.branchId) : null;
-  if (valid.branchId && !branch) return json({ ok: false, error: 'That salon location is not active.' }, 400);
+  const branches = await getActiveBranches(db, salon.owner_id);
+  if (!branches) return json({ ok: false, error: 'Salon locations could not be loaded.' }, 503);
+  if (branches.length > 1 && !valid.branchId) {
+    return json({ ok: false, error: 'Choose a salon location before testing the booking.', requiresBranch: true }, 400);
+  }
+  const branchId = valid.branchId || (branches.length === 1 ? branches[0].id : undefined);
+  const branch = branches.find((item) => item.id === branchId) || null;
+  if (branchId && !branch) return json({ ok: false, error: 'That salon location is not active.' }, 400);
 
   const selected = getServiceItems(salon.content, valid.serviceIds);
   if (!selected) return json({ ok: false, error: 'One of the selected services is no longer available.' }, 409);
@@ -314,7 +323,7 @@ async function handleTestBooking(
     serviceIds: valid.serviceIds,
     date: valid.date,
     stylistId: requestedStylist,
-    branchId: valid.branchId,
+    branchId,
   });
   if (!slots) return json({ ok: false, error: 'Live availability could not be checked. No test record was saved.' }, 503);
 
@@ -334,7 +343,7 @@ async function handleTestBooking(
     date: valid.date,
     time,
     stylistId,
-    branchId: valid.branchId || null,
+    branchId: branchId || null,
     customerName,
     customerPhone,
     notes,
