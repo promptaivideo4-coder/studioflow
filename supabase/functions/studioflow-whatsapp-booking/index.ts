@@ -309,6 +309,7 @@ async function handleTestBooking(
   if (!salon) return json({ ok: false, error: 'Salon not found or not published.' }, 404);
   const branches = await getActiveBranches(db, salon.owner_id);
   if (!branches) return json({ ok: false, error: 'Salon locations could not be loaded.' }, 503);
+  if (branches.length === 0) return json({ ok: false, error: 'This salon has no active booking location.' }, 409);
   if (branches.length > 1 && !valid.branchId) {
     return json({ ok: false, error: 'Choose a salon location before testing the booking.', requiresBranch: true }, 400);
   }
