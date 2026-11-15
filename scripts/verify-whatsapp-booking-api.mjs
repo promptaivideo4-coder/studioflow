@@ -2,7 +2,7 @@ import {readFileSync} from 'node:fs';
 import assert from 'node:assert/strict';
 
 const source = readFileSync('supabase/functions/studioflow-whatsapp-booking/index.ts', 'utf8');
-const migration = readFileSync('supabase/migrations/202611150001_studioflow_whatsapp_test_booking_api.sql', 'utf8');
+const migration = readFileSync('supabase/migrations/20261115132100_studioflow_whatsapp_test_booking_api.sql', 'utf8');
 const spec = JSON.parse(readFileSync('docs/integrations/nexora-whatsapp-booking.openapi.json', 'utf8'));
 const docs = readFileSync('docs/integrations/NEXORA-WHATSAPP-BOOKING-TEST.md', 'utf8');
 
