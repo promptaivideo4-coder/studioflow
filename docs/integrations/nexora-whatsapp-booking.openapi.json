@@ -125,9 +125,9 @@
   "components": {
     "securitySchemes": {
       "NexoraBookingKey": {
-        "type": "apiKey",
-        "in": "header",
-        "name": "X-NEXORA-BOOKING-KEY"
+        "type": "http",
+        "scheme": "bearer",
+        "bearerFormat": "NEXORA Tawk API key"
       }
     },
     "schemas": {
