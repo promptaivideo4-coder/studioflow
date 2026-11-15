@@ -31,3 +31,70 @@ grant select, insert, update, delete on table public.studioflow_whatsapp_test_bo
 
 comment on table public.studioflow_whatsapp_test_bookings is
   'Private test-only WhatsApp booking simulation records. Never reserves the live studioflow_bookings calendar and is excluded from payment, loyalty and revenue flows.';
+
+-- Private rolling-window limiter for WhatsApp test calls.
+create table if not exists public.studioflow_whatsapp_test_rate_limits (
+  owner_id uuid not null references public.studioflow_accounts(user_id) on delete cascade,
+  phone_hash text not null check (phone_hash ~ '^[a-f0-9]{64}$'),
+  window_started_at timestamptz not null default now(),
+  attempt_count integer not null default 0 check (attempt_count >= 0),
+  primary key (owner_id, phone_hash)
+);
+
+alter table public.studioflow_whatsapp_test_rate_limits enable row level security;
+revoke all on table public.studioflow_whatsapp_test_rate_limits from public, anon, authenticated, service_role;
+
+create or replace function public.studioflow_whatsapp_test_rate_limit(
+  p_owner_id uuid,
+  p_phone_hash text,
+  p_max_attempts integer default 10
+)
+returns jsonb
+language plpgsql
+security definer
+set search_path = ''
+as $function$
+declare
+  v_count integer;
+  v_window timestamptz;
+begin
+  if auth.role() is distinct from 'service_role' then
+    raise exception 'Service role required' using errcode = '42501';
+  end if;
+  if p_owner_id is null or p_phone_hash is null
+     or p_phone_hash !~ '^[a-f0-9]{64}$'
+     or p_max_attempts is null or p_max_attempts not between 1 and 100 then
+    raise exception 'Invalid rate-limit request' using errcode = '22023';
+  end if;
+
+  perform pg_advisory_xact_lock(hashtextextended(p_owner_id::text || ':' || p_phone_hash, 91));
+
+  insert into public.studioflow_whatsapp_test_rate_limits(owner_id, phone_hash, window_started_at, attempt_count)
+  values (p_owner_id, p_phone_hash, now(), 1)
+  on conflict (owner_id, phone_hash) do update
+    set window_started_at = case
+          when public.studioflow_whatsapp_test_rate_limits.window_started_at <= now() - interval '1 hour'
+          then now()
+          else public.studioflow_whatsapp_test_rate_limits.window_started_at
+        end,
+        attempt_count = case
+          when public.studioflow_whatsapp_test_rate_limits.window_started_at <= now() - interval '1 hour'
+          then 1
+          else public.studioflow_whatsapp_test_rate_limits.attempt_count + 1
+        end
+  returning attempt_count, window_started_at into v_count, v_window;
+
+  return jsonb_build_object(
+    'allowed', v_count <= p_max_attempts,
+    'count', v_count,
+    'remaining', greatest(0, p_max_attempts - v_count),
+    'retryAfterSeconds', greatest(0, ceil(extract(epoch from (v_window + interval '1 hour' - now())))::integer)
+  );
+end
+$function$;
+
+revoke all on function public.studioflow_whatsapp_test_rate_limit(uuid, text, integer) from public, anon, authenticated;
+grant execute on function public.studioflow_whatsapp_test_rate_limit(uuid, text, integer) to service_role;
+
+comment on table public.studioflow_whatsapp_test_rate_limits is
+  'Private rolling-window counters for the isolated NEXORA WhatsApp test endpoint.';
