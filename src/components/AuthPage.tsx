@@ -1,5 +1,6 @@
 import React, { useState, useId } from 'react';
 import {captureCustomerReferral,rememberCustomerReferral,clearCustomerReferral} from '../lib/customerReferral';
+import { cleanCustomerAppReturnPath, clearOAuthIntent, readAuthUrlError, saveOAuthIntent } from '../lib/authEntry';
 import {whatsappNational,validCustomerWhatsApp,customerWhatsApp} from '../lib/customerWhatsApp';
 import {customerToday,validCustomerBirthDate} from '../lib/customerBirthDate';
 import { requestedTemplate } from '../lib/templateEntry';
@@ -7,20 +8,23 @@ import { isBillingInterval, isPricingPlanId, pricingResumePath } from '../lib/ne
 import { Eye, EyeOff } from 'lucide-react';
 import { supabase, captureReferral } from '../lib/supabase';
 
-export function AuthPage({ compact = false, recovery = false, onRecovered, customerMode, initialMode, returnSlug, invitationMode=false }: { key?:React.Key; compact?: boolean; recovery?: boolean; onRecovered?: () => void; customerMode?:boolean; initialMode?:'signin'|'signup'; returnSlug?:string; invitationMode?:boolean }) {
+export function AuthPage({ compact = false, recovery = false, onRecovered, customerMode, initialMode, returnSlug, invitationMode=false, redirectPathOverride }: { key?:React.Key; compact?: boolean; recovery?: boolean; onRecovered?: () => void; customerMode?:boolean; initialMode?:'signin'|'signup'; returnSlug?:string; invitationMode?:boolean; redirectPathOverride?:string }) {
   const passwordId = useId(); const confirmId = useId();
   const [confirmVisible, setConfirmVisible] = useState(false);
-  const customer = customerMode ?? new URLSearchParams(location.search).has('customer');
-  const customerReturn=returnSlug||new URLSearchParams(location.search).get('return');
-  const selectedTemplate=requestedTemplate(location.search);
-  const loginParams=new URLSearchParams(location.search);
+  const search = typeof location === 'undefined' ? '' : (location.search || '');
+  const hash = typeof location === 'undefined' ? '' : (location.hash || '');
+  const origin = typeof location === 'undefined' ? '' : (location.origin || '');
+  const loginParams=new URLSearchParams(search);
+  const customer = customerMode ?? loginParams.has('customer');
+  const customerReturn=returnSlug||loginParams.get('return');
+  const selectedTemplate=requestedTemplate(search);
   const pricingPlanId=loginParams.get('pricing_plan');
   const pricingBilling=loginParams.get('billing_interval');
   const pricingReturnPath=isPricingPlanId(pricingPlanId)?pricingResumePath({planId:pricingPlanId,billingInterval:isBillingInterval(pricingBilling)?pricingBilling:'annual'}):'';
   const pendingCustomerRef=customer?captureCustomerReferral():'';
   const baseRedirectPath=loginParams.has('app')?'/?app=1':customer?`/?customer=1${customerReturn?'&return='+encodeURIComponent(customerReturn):''}`:selectedTemplate?`/?template=${encodeURIComponent(selectedTemplate.id)}&create=1`:pricingReturnPath||'/';
   const redirectPath=baseRedirectPath+(pendingCustomerRef?(baseRedirectPath.includes('?')?'&':'?')+'customer_ref='+encodeURIComponent(pendingCustomerRef):'');
-  const [mode, setMode] = useState<'signin'|'signup'|'forgot'>((new URLSearchParams(location.search).get('auth') === 'forgot' ? 'forgot' : new URLSearchParams(location.search).get('auth')==='signin'?'signin':initialMode) || (new URLSearchParams(location.search).get('auth')==='signup' || (customer?pendingCustomerRef:captureReferral()) ? 'signup' : 'signin'));
+  const [mode, setMode] = useState<'signin'|'signup'|'forgot'>((loginParams.get('auth') === 'forgot' ? 'forgot' : loginParams.get('auth')==='signin'?'signin':initialMode) || (loginParams.get('auth')==='signup' || (customer?pendingCustomerRef:captureReferral()) ? 'signup' : 'signin'));
   const signup = mode === 'signup';
   const [welcomeWhatsApp,setWelcomeWhatsApp]=useState(false);
   const [birthDate,setBirthDate]=useState('');const [whatsapp,setWhatsapp]=useState('');
@@ -29,7 +33,27 @@ export function AuthPage({ compact = false, recovery = false, onRecovered, custo
   const [confirm, setConfirm] = useState(''); const [visible, setVisible] = useState(false);
   const [ref, setRef] = useState(()=>customer?captureCustomerReferral():captureReferral()); const [busy, setBusy] = useState(false);
   const [resetSent, setResetSent] = useState(false);
-  const [message, setMessage] = useState(() => new URLSearchParams(location.hash.slice(1)).get('error_description') || (new URLSearchParams(location.search).has('recovery') && !recovery ? 'Reset link expired or could not be verified. Request a new link using Forgot password.' : '')); const [confirmationPending, setConfirmationPending] = useState(false);
+  const [message, setMessage] = useState(() => readAuthUrlError(search, hash) || (loginParams.has('recovery') && !recovery ? 'Reset link expired or could not be verified. Request a new link using Forgot password.' : '')); const [confirmationPending, setConfirmationPending] = useState(false);
+
+  const normalizedRef = ref.trim().toUpperCase();
+  const pricingLoginPath = pricingReturnPath
+    ? `/login?pricing_plan=${encodeURIComponent(pricingPlanId!)}&billing_interval=${encodeURIComponent(isBillingInterval(pricingBilling) ? pricingBilling : 'annual')}`
+    : '';
+  const ownerSlugParam = loginParams.get('owner');
+  const panelParam = loginParams.has('panel') ? (loginParams.get('panel') || '1') : '';
+  const oauthCustomerRef = customer ? ((signup || invitationMode) ? normalizedRef : pendingCustomerRef) : '';
+  const oauthRedirectPath = invitationMode
+    ? '/?app=1&tab=rewards'
+    : redirectPathOverride
+      ? redirectPathOverride + (oauthCustomerRef ? (redirectPathOverride.includes('?') ? '&' : '?') + 'customer_ref=' + encodeURIComponent(oauthCustomerRef) : '')
+      : loginParams.has('app')
+        ? cleanCustomerAppReturnPath(search, (signup || invitationMode) ? normalizedRef : undefined)
+        : customer
+          ? baseRedirectPath + (oauthCustomerRef ? (baseRedirectPath.includes('?') ? '&' : '?') + 'customer_ref=' + encodeURIComponent(oauthCustomerRef) : '')
+          : selectedTemplate
+            ? `/?template=${encodeURIComponent(selectedTemplate.id)}&create=1`
+            : pricingLoginPath || (ownerSlugParam ? `/?owner=${encodeURIComponent(ownerSlugParam)}` : panelParam ? `/?panel=${encodeURIComponent(panelParam)}` : '/login');
+
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setMessage('');
     try {
@@ -41,35 +65,86 @@ export function AuthPage({ compact = false, recovery = false, onRecovered, custo
         location.assign(`${redirectPath}${redirectPath.includes('?') ? '&' : '?'}passwordUpdated=1`); return;
       }
       if (mode === 'forgot') {
-        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${location.origin}${redirectPath}${redirectPath.includes('?') ? '&' : '?'}recovery=1` });
+        const { error } = await supabase.auth.resetPasswordForEmail(email.trim(), { redirectTo: `${origin}${redirectPath}${redirectPath.includes('?') ? '&' : '?'}recovery=1` });
         if (error) throw error;
         setResetSent(true);
         setMessage('If an account exists for this email, a password reset link will be sent. Open that link to choose a new password.'); return;
       }
       if(signup&&customer&&(!whatsapp||!validCustomerWhatsApp(whatsapp)))throw new Error('Enter a valid 10-digit WhatsApp number. +91 is already added.');
       if(signup&&customer&&(!birthDate||!validCustomerBirthDate(birthDate)))throw new Error('Enter a valid date of birth from 1900 through today.');
-      if (signup && ref.trim()) {
-        const { data, error } = await supabase.rpc(customer?'studioflow_customer_validate_ref':'studioflow_validate_ref', { p_code: ref.trim().toUpperCase() });
-        if (error) throw error; if (!data) throw new Error('Referral code is invalid or inactive. Check it or leave it empty.');
+      if (signup && normalizedRef) {
+        const { data, error } = await supabase.rpc(customer?'studioflow_customer_validate_ref':'studioflow_validate_ref', { p_code: normalizedRef });
+        if (error) throw new Error(error.message); if (!data) throw new Error('Referral code is invalid or inactive. Check it or leave it empty.');
       }
       if(signup&&customer)rememberCustomerReferral(ref);
       if (signup && !customer) {
         localStorage.removeItem('studioflow_pending_ref');
         const url = new URL(location.href); url.searchParams.delete('ref'); history.replaceState(null, '', url);
-        if (ref.trim()) localStorage.setItem('studioflow_pending_ref', ref.trim().toUpperCase());
+        if (normalizedRef) localStorage.setItem('studioflow_pending_ref', normalizedRef);
       }
-      if(invitationMode&&signup){const current=await supabase.auth.getSession();if(current.error)throw current.error;if(current.data.session){const out=await supabase.auth.signOut({scope:'local'});if(out.error)throw out.error;}}
-      const result = signup ? await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: `${location.origin}${invitationMode?'/?app=1&tab=rewards':customer?baseRedirectPath+(ref.trim()?(baseRedirectPath.includes('?')?'&':'?')+'customer_ref='+encodeURIComponent(ref.trim().toUpperCase()):''):redirectPath}`, data: { full_name: name.trim(), salon_name: salon.trim(), ...(customer?{customer_referral_code:ref.trim().toUpperCase(),date_of_birth:birthDate||null,whatsapp_number:customerWhatsApp(whatsapp),whatsapp_welcome_opt_in:welcomeWhatsApp}:{referral_code:ref.trim().toUpperCase()}), source: 'studioflow' } } }) : await supabase.auth.signInWithPassword({ email: email.trim(), password });
-      if (result.error) throw result.error;
+      if(invitationMode&&signup){const current=await supabase.auth.getSession();if(current.error)throw new Error(current.error.message);if(current.data.session){const out=await supabase.auth.signOut({scope:'local'});if(out.error)throw new Error(out.error.message);}}
+      const result = signup ? await supabase.auth.signUp({ email: email.trim(), password, options: { emailRedirectTo: `${origin}${invitationMode?'/?app=1&tab=rewards':customer?baseRedirectPath+(normalizedRef?(baseRedirectPath.includes('?')?'&':'?')+'customer_ref='+encodeURIComponent(normalizedRef):''):redirectPath}`, data: { full_name: name.trim(), salon_name: salon.trim(), ...(customer?{customer_referral_code:normalizedRef,date_of_birth:birthDate||null,whatsapp_number:customerWhatsApp(whatsapp),whatsapp_welcome_opt_in:welcomeWhatsApp}:{referral_code:normalizedRef}), source: 'studioflow' } } }) : await supabase.auth.signInWithPassword({ email: email.trim(), password });
+      if (result.error) throw new Error(result.error.message);
       if(invitationMode&&result.data.session){clearCustomerReferral();location.assign('/?app=1&tab=rewards');return;}
       if(result.data.session&&pricingReturnPath){location.assign(pricingReturnPath);return;}
       if (signup && !result.data.session) { setConfirmationPending(true); setMessage('Check your email to confirm your account, then sign in. If you already have an account, use Sign in or Forgot password.'); }
-    } catch (error) { setMessage(error instanceof Error ? error.message : 'Could not complete this request. Please try again.'); }
+    } catch (error) { setMessage(error instanceof Error ? error.message : (typeof (error as { message?: unknown })?.message === 'string' && (error as { message: string }).message) || 'Could not complete this request. Please try again.'); }
     finally { setBusy(false); }
+  };
+  const signInWithGoogle = async () => {
+    setBusy(true); setMessage('');
+    try {
+      if ((signup || invitationMode) && normalizedRef) {
+        const { data, error } = await supabase.rpc(customer ? 'studioflow_customer_validate_ref' : 'studioflow_validate_ref', { p_code: normalizedRef });
+        if (error) throw new Error(error.message);
+        if (!data) throw new Error('Referral code is invalid or inactive. Check it or leave it empty.');
+      }
+      if ((signup || invitationMode) && customer) {
+        if (normalizedRef) rememberCustomerReferral(normalizedRef);
+        else if (typeof location !== 'undefined' && location.href) clearCustomerReferral();
+      }
+      if (signup && !customer) {
+        try { localStorage.removeItem('studioflow_pending_ref'); } catch {}
+        if (typeof location !== 'undefined' && location.href && typeof history !== 'undefined') {
+          const url = new URL(location.href);
+          url.searchParams.delete('ref');
+          history.replaceState(null, '', url);
+        }
+        if (normalizedRef) {
+          try { localStorage.setItem('studioflow_pending_ref', normalizedRef); } catch {}
+        }
+      }
+      if (invitationMode) {
+        const current = await supabase.auth.getSession();
+        if (current.error) throw new Error(current.error.message);
+        if (current.data.session) {
+          const out = await supabase.auth.signOut({ scope: 'local' });
+          if (out.error) throw new Error(out.error.message);
+        }
+      }
+      // Persist the owner-vs-customer intent so the post-OAuth return lands in the same flow as email sign-in.
+      saveOAuthIntent({
+        path: oauthRedirectPath,
+        flow: invitationMode ? 'invite' : loginParams.has('app') ? 'app' : customer ? 'customer' : 'owner',
+      });
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: `${origin}${oauthRedirectPath}`,
+          queryParams: { prompt: 'select_account' },
+        },
+      });
+      if (error) throw new Error(error.message);
+      if (!data?.url) setBusy(false);
+    } catch (error) {
+      clearOAuthIntent();
+      setMessage(error instanceof Error ? error.message : (typeof (error as { message?: unknown })?.message === 'string' && (error as { message: string }).message) || 'Could not complete Google sign-in. Please try again.');
+      setBusy(false);
+    }
   };
   const resend = async () => {
     setBusy(true); setMessage('');
-    const { error } = await supabase.auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: `${location.origin}${invitationMode?'/?app=1&tab=rewards':redirectPath}` } });
+    const { error } = await supabase.auth.resend({ type: 'signup', email: email.trim(), options: { emailRedirectTo: `${origin}${invitationMode?'/?app=1&tab=rewards':redirectPath}` } });
     setMessage(error ? error.message : 'Confirmation email requested. Check your inbox and spam folder.'); setBusy(false);
   };
   const standardSignIn = !compact && !recovery && mode === 'signin' && !customer;
@@ -80,7 +155,8 @@ export function AuthPage({ compact = false, recovery = false, onRecovered, custo
       <p className="eyebrow">NEXORA · Salon OS</p><h1 className="text-3xl font-bold mb-2">{pageHeading}</h1>
       <p className="muted mb-5">{pageDescription}</p>
       {!recovery && mode !== 'forgot' && <div className="flex gap-3 mb-5"><button disabled={busy} type="button" className={signup ? 'secondary-action' : 'primary-action'} onClick={() => { setMode('signin'); setMessage(''); }}>Sign in</button><button disabled={busy} type="button" className={signup ? 'primary-action' : 'secondary-action'} onClick={() => { setMode('signup'); setMessage(''); }}>Sign up</button></div>}
-      {!recovery && new URLSearchParams(location.search).has('passwordUpdated') && <p role="status" className="mb-4 rounded-lg bg-green-50 p-3 text-green-900">Password updated successfully. Sign in with your new password.</p>}
+      {!recovery && loginParams.has('passwordUpdated') && <p role="status" className="mb-4 rounded-lg bg-green-50 p-3 text-green-900">Password updated successfully. Sign in with your new password.</p>}
+      {!recovery && mode !== 'forgot' && <><button type="button" disabled={busy} onClick={() => void signInWithGoogle()} className="secondary-action w-full justify-center mb-3">Continue with Google</button><p className="text-center text-xs text-slate-500 mb-4">or use email</p></>}
       <form onSubmit={submit} className="space-y-4">
         {signup && !recovery && <><label className="block">Full name<input className="workspace-input" autoComplete="name" maxLength={150} value={name} onChange={e => setName(e.target.value)} required /></label>{!customer && <label className="block">Salon name<input className="workspace-input" maxLength={150} value={salon} onChange={e => setSalon(e.target.value)} required /></label>}</>}
         {signup&&customer&&!recovery&&<label className="block">Date of Birth<input className="workspace-input" type="date" required autoComplete="bday" min="1900-01-01" max={customerToday()} value={birthDate} onChange={e=>setBirthDate(e.target.value)}/><small>Your date of birth stays private and is not shared with your inviter.</small></label>}

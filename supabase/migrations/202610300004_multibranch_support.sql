@@ -99,21 +99,25 @@ drop policy if exists studioflow_bookings_branch_staff_read on public.studioflow
 create policy studioflow_bookings_branch_staff_read on public.studioflow_bookings for select to authenticated
   using(branch_id is not null and exists(select 1 from public.studioflow_branch_staff_members m where m.site_id=studioflow_bookings.owner_id and m.branch_id=studioflow_bookings.branch_id and m.user_id=(select auth.uid()) and m.is_active));
 
--- Backfill one safe primary location for all existing tenants before installing
--- synchronization, so existing single-location booking flows keep working.
+-- Backfill one safe primary location for existing single-location tenants that do
+-- not already define profile.branches in workspace JSON, so existing single-location
+-- booking flows keep working without colliding with branches(site_id, name).
 insert into public.branches(site_id,name,city,address,phone,is_active,operating_hours)
 select a.user_id,
   left(coalesce(nullif(btrim(a.draft->'profile'->>'businessName'),''),'Main location'),120),
   coalesce(a.draft->'profile'->>'city',''), coalesce(a.draft->'profile'->>'address',''),
   coalesce(a.draft->'profile'->>'phone',''), true,
   coalesce((select jsonb_agg(jsonb_build_object('day',d,'enabled',d<>'Sunday','fromTime','09:00','toTime','20:00')) from unnest(array['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']) d),'[]'::jsonb)
-from public.studioflow_accounts a where not exists(select 1 from public.branches b where b.site_id=a.user_id)
+from public.studioflow_accounts a
+where not exists(select 1 from public.branches b where b.site_id=a.user_id)
+  and (jsonb_typeof(a.draft->'profile'->'branches') is distinct from 'array' or jsonb_array_length(a.draft->'profile'->'branches')=0)
 on conflict(site_id,name) do nothing;
 create or replace function studioflow_private.sync_branches_from_workspace() returns trigger
 language plpgsql security definer set search_path='' as $$
 declare
   profile jsonb:=coalesce(new.draft->'profile','{}'::jsonb); branch_data jsonb:=profile->'branches'; item jsonb; branch_key uuid;
-  stylist jsonb; schedule_item jsonb; day_name text; hours jsonb; branch_row record; stylist_schedule jsonb; branch_schedule jsonb; raw_day jsonb;
+  stylist jsonb; schedule_item jsonb; day_name text; branch_row record; stylist_schedule jsonb; branch_schedule jsonb;
+  from_t time; to_t time; day_enabled boolean;
   branch_ids uuid[]:='{}';
 begin
   if jsonb_typeof(branch_data)='array' and jsonb_array_length(branch_data)>0 then
@@ -154,11 +158,14 @@ begin
       for schedule_item in select value from jsonb_array_elements(coalesce(branch_schedule,'[]'::jsonb)) loop
         day_name:=schedule_item->>'day';
         if day_name not in ('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday') then continue; end if;
+        day_enabled:=coalesce((schedule_item->>'enabled')::boolean,false);
+        from_t:=nullif(btrim(schedule_item->>'fromTime'),'')::time;
+        to_t:=nullif(btrim(schedule_item->>'toTime'),'')::time;
         insert into public.studioflow_staff_branch_schedules(site_id,branch_id,staff_id,day_of_week,starts_at,ends_at,is_active)
         values(new.user_id,branch_row.id,stylist->>'id',day_name,
-          case when coalesce((schedule_item->>'enabled')::boolean,false) then (schedule_item->>'fromTime')::time end,
-          case when coalesce((schedule_item->>'enabled')::boolean,false) then (schedule_item->>'toTime')::time end,
-          coalesce((schedule_item->>'enabled')::boolean,false) and (schedule_item->>'fromTime') is not null and (schedule_item->>'toTime') is not null and (schedule_item->>'toTime')::time>(schedule_item->>'fromTime')::time)
+          case when day_enabled and from_t is not null and to_t is not null and to_t>from_t then from_t end,
+          case when day_enabled and from_t is not null and to_t is not null and to_t>from_t then to_t end,
+          day_enabled and from_t is not null and to_t is not null and to_t>from_t)
         on conflict(site_id,branch_id,staff_id,day_of_week) do update set starts_at=excluded.starts_at,ends_at=excluded.ends_at,is_active=excluded.is_active,updated_at=now();
       end loop;
     end loop;
@@ -169,9 +176,69 @@ revoke all on function studioflow_private.sync_branches_from_workspace() from pu
 drop trigger if exists studioflow_sync_branches_after_workspace on public.studioflow_accounts;
 create trigger studioflow_sync_branches_after_workspace after insert or update of draft on public.studioflow_accounts for each row execute function studioflow_private.sync_branches_from_workspace();
 
--- Project the current drafts after the sync trigger is installed, then attach
+-- Project existing account drafts into relational branches and staff schedules
+-- directly without firing unrelated draft update triggers, then attach
 -- historical reservations to a surviving primary location without rewriting payloads.
-update public.studioflow_accounts set draft=draft;
+do $$
+declare
+  acct record; profile jsonb; branch_data jsonb; item jsonb; branch_key uuid;
+  stylist jsonb; schedule_item jsonb; day_name text; branch_row record; stylist_schedule jsonb; branch_schedule jsonb;
+  from_t time; to_t time; day_enabled boolean;
+  branch_ids uuid[];
+begin
+  for acct in select user_id, draft from public.studioflow_accounts loop
+    profile:=coalesce(acct.draft->'profile','{}'::jsonb); branch_data:=profile->'branches'; branch_ids:='{}';
+    if jsonb_typeof(branch_data)='array' and jsonb_array_length(branch_data)>0 then
+      if jsonb_array_length(branch_data)>50 then raise exception 'A maximum of 50 locations is supported'; end if;
+      for item in select value from jsonb_array_elements(branch_data) loop
+        begin branch_key:=(item->>'id')::uuid; exception when others then raise exception 'Each location needs a valid ID'; end;
+        if coalesce(btrim(item->>'name'),'')='' then raise exception 'Each location needs a name'; end if;
+        insert into public.branches(id,site_id,name,city,address,phone,is_active,operating_hours,updated_at)
+        values(branch_key,acct.user_id,left(btrim(item->>'name'),120),left(coalesce(item->>'city',''),120),left(coalesce(item->>'address',''),500),left(coalesce(item->>'phone',''),40),coalesce((item->>'isActive')::boolean,true),coalesce(item->'operatingHours','[]'::jsonb),now())
+        on conflict(site_id,id) do update set name=excluded.name,city=excluded.city,address=excluded.address,phone=excluded.phone,is_active=excluded.is_active,operating_hours=excluded.operating_hours,updated_at=now();
+        branch_ids:=array_append(branch_ids,branch_key);
+      end loop;
+      update public.branches set is_active=false,updated_at=now() where site_id=acct.user_id and not(id=any(branch_ids));
+    else
+      select array_agg(id) into branch_ids from public.branches where site_id=acct.user_id and is_active;
+      if coalesce(array_length(branch_ids,1),0)=0 then
+        insert into public.branches(site_id,name,city,address,phone,is_active,operating_hours)
+        values(acct.user_id,left(coalesce(nullif(btrim(profile->>'businessName'),''),'Main location'),120),coalesce(profile->>'city',''),coalesce(profile->>'address',''),coalesce(profile->>'phone',''),true,
+          coalesce((select jsonb_agg(jsonb_build_object('day',d,'enabled',d<>'Sunday','fromTime','09:00','toTime','20:00')) from unnest(array['Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday']) d),'[]'::jsonb))
+        on conflict(site_id,name) do update set is_active=true,updated_at=now() returning id into branch_key;
+      end if;
+    end if;
+
+    delete from public.studioflow_staff_branch_schedules where site_id=acct.user_id;
+    for stylist in select value from jsonb_array_elements(coalesce(acct.draft->'stylists','[]'::jsonb)) loop
+      if coalesce(stylist->>'id','')='' then continue; end if;
+      stylist_schedule:=coalesce(stylist->'schedule','[]'::jsonb);
+      for branch_row in select id,operating_hours from public.branches where site_id=acct.user_id and is_active loop
+        branch_schedule:=null;
+        if jsonb_typeof(stylist->'branchSchedules')='array' then
+          select value->'schedule' into branch_schedule from jsonb_array_elements(stylist->'branchSchedules') value where value->>'branchId'=branch_row.id::text limit 1;
+          if branch_schedule is null then continue; end if;
+        else
+          branch_schedule:=stylist_schedule;
+          if jsonb_typeof(branch_schedule)<>'array' or jsonb_array_length(branch_schedule)=0 then branch_schedule:=branch_row.operating_hours; end if;
+        end if;
+        for schedule_item in select value from jsonb_array_elements(coalesce(branch_schedule,'[]'::jsonb)) loop
+          day_name:=schedule_item->>'day';
+          if day_name not in ('Monday','Tuesday','Wednesday','Thursday','Friday','Saturday','Sunday') then continue; end if;
+          day_enabled:=coalesce((schedule_item->>'enabled')::boolean,false);
+          from_t:=nullif(btrim(schedule_item->>'fromTime'),'')::time;
+          to_t:=nullif(btrim(schedule_item->>'toTime'),'')::time;
+          insert into public.studioflow_staff_branch_schedules(site_id,branch_id,staff_id,day_of_week,starts_at,ends_at,is_active)
+          values(acct.user_id,branch_row.id,stylist->>'id',day_name,
+            case when day_enabled and from_t is not null and to_t is not null and to_t>from_t then from_t end,
+            case when day_enabled and from_t is not null and to_t is not null and to_t>from_t then to_t end,
+            day_enabled and from_t is not null and to_t is not null and to_t>from_t)
+          on conflict(site_id,branch_id,staff_id,day_of_week) do update set starts_at=excluded.starts_at,ends_at=excluded.ends_at,is_active=excluded.is_active,updated_at=now();
+        end loop;
+      end loop;
+    end loop;
+  end loop;
+end $$;
 update public.studioflow_bookings b set branch_id=(select id from public.branches x where x.site_id=b.owner_id and x.is_active order by x.created_at,x.id limit 1)
 where b.branch_id is null and exists(select 1 from public.branches x where x.site_id=b.owner_id and x.is_active);
 
@@ -206,33 +273,37 @@ create trigger studioflow_booking_branch_guard before insert or update of branch
 
 create or replace function studioflow_private.branch_slots(p_slug text,p_services jsonb,p_date date,p_stylist text,p_branch uuid)
 returns jsonb language plpgsql stable security definer set search_path='' as $$
-declare w public.studioflow_websites; branch_row public.branches; ids text[]; total_minutes int; result jsonb; day_name text; branch_day jsonb;
+declare w public.studioflow_websites; branch_row public.branches; v_draft jsonb; ids text[]; total_minutes int; matched_count int; lead_hours numeric; result jsonb; day_name text; branch_day jsonb; ist_today date:=(now() at time zone 'Asia/Kolkata')::date;
 begin
  select * into w from public.studioflow_websites where slug=p_slug;
  select * into branch_row from public.branches where site_id=w.owner_id and id=p_branch and is_active;
- if w.owner_id is null or branch_row.id is null or jsonb_typeof(p_services) is distinct from 'array' or jsonb_array_length(p_services) not between 1 and 10 or p_date<current_date or p_date>current_date+90 then return '[]'::jsonb; end if;
+ if w.owner_id is null or branch_row.id is null or jsonb_typeof(p_services) is distinct from 'array' or jsonb_array_length(p_services) not between 1 and 10 or p_date is null or p_date<ist_today or p_date>ist_today+90 then return '[]'::jsonb; end if;
+ if exists(select 1 from jsonb_array_elements(p_services) el where jsonb_typeof(el)<>'string') then return '[]'::jsonb; end if;
  select array_agg(distinct value) into ids from jsonb_array_elements_text(p_services);
- select coalesce(sum(greatest(1,(s->>'durationMinutes')::int)),0) into total_minutes from jsonb_array_elements(w.content->'services') s where s->>'id'=any(ids);
- if coalesce(array_length(ids,1),0)<>jsonb_array_length(p_services) or total_minutes<=0 or (select count(*) from jsonb_array_elements(w.content->'services') s where s->>'id'=any(ids))<>array_length(ids,1) then return '[]'::jsonb; end if;
+ select count(*),coalesce(sum(greatest(1,coalesce(nullif(s->>'durationMinutes','')::int,0))),0) into matched_count,total_minutes from jsonb_array_elements(w.content->'services') s where s->>'id'=any(ids);
+ if coalesce(array_length(ids,1),0)<>jsonb_array_length(p_services) or total_minutes<=0 or matched_count<>array_length(ids,1) then return '[]'::jsonb; end if;
  day_name:=trim(to_char(p_date,'Day'));
  select value into branch_day from jsonb_array_elements(branch_row.operating_hours) value where value->>'day'=day_name limit 1;
- if branch_day is null or not coalesce((branch_day->>'enabled')::boolean,false) then return '[]'::jsonb; end if;
+ if branch_day is null or not coalesce((branch_day->>'enabled')::boolean,false) or nullif(btrim(branch_day->>'fromTime'),'') is null or nullif(btrim(branch_day->>'toTime'),'') is null or (branch_day->>'toTime')::time<=(branch_day->>'fromTime')::time then return '[]'::jsonb; end if;
+ select draft into v_draft from public.studioflow_accounts where user_id=w.owner_id;
+ lead_hours:=greatest(0,coalesce((w.content->'profile'->'bookingRules'->>'leadHours')::numeric,(v_draft->'extras'->>'bookingLeadHours')::numeric,0));
  with staff as (
    select s,sch.starts_at,sch.ends_at from public.studioflow_staff_branch_schedules sch
-   join jsonb_array_elements(w.content->'stylists') s on s->>'id'=sch.staff_id
-   where sch.site_id=w.owner_id and sch.branch_id=p_branch and sch.day_of_week=day_name and sch.is_active
+   join jsonb_array_elements(coalesce(v_draft->'stylists',w.content->'stylists','[]'::jsonb)) s on s->>'id'=sch.staff_id
+   where exists(select 1 from jsonb_array_elements(coalesce(w.content->'stylists','[]'::jsonb)) pub where pub->>'id'=s->>'id')
+     and sch.site_id=w.owner_id and sch.branch_id=p_branch and sch.day_of_week=day_name and sch.is_active
      and (p_stylist in ('any','any-specialist','any_available') or sch.staff_id=p_stylist)
      and coalesce(s->>'status','Available')='Available'
-     and (s->'assignedServices' is null or jsonb_typeof(s->'assignedServices')<>'array' or jsonb_array_length(s->'assignedServices')=0 or exists(select 1 from jsonb_array_elements_text(s->'assignedServices') a where a=any(ids)))
+     and (s->'assignedServices' is null or jsonb_typeof(s->'assignedServices')<>'array' or jsonb_array_length(s->'assignedServices')=0 or s->'assignedServices' @> to_jsonb(ids))
  ), candidates as (
    select staff.s->>'id' stylist_id,slot,slot+total_minutes*interval '1 minute' end_slot
    from staff cross join generate_series(p_date+(branch_day->>'fromTime')::time,p_date+(branch_day->>'toTime')::time,interval '30 minutes') slot
-   where slot::time>=greatest(staff.starts_at,(branch_day->>'fromTime')::time) and (slot+total_minutes*interval '1 minute')::time<=least(staff.ends_at,(branch_day->>'toTime')::time)
+   where slot::time>=greatest(staff.starts_at,(branch_day->>'fromTime')::time) and slot+total_minutes*interval '1 minute'<=p_date+least(staff.ends_at,(branch_day->>'toTime')::time)
  ), available as (
    select to_char(slot,'HH24:MI') time,to_char(slot,'HH12:MI AM') label,stylist_id,
-    slot at time zone 'Asia/Kolkata'>now() and slot<=now()+interval '90 days'
-    and slot at time zone 'Asia/Kolkata'>now()+greatest(0,coalesce((w.content->'profile'->'bookingRules'->>'leadHours')::numeric,0))*interval '1 hour'
-    and not exists(select 1 from public.studioflow_bookings b where b.owner_id=w.owner_id and b.branch_id=p_branch and b.stylist_id=c.stylist_id and b.status in ('pending','confirmed') and b.starts_at<(end_slot at time zone 'Asia/Kolkata') and b.ends_at>slot at time zone 'Asia/Kolkata') as available from candidates c
+    (slot at time zone 'Asia/Kolkata')>now()+lead_hours*interval '1 hour'
+    and (slot at time zone 'Asia/Kolkata')<=now()+interval '90 days'
+    and not exists(select 1 from public.studioflow_bookings b where b.owner_id=w.owner_id and b.stylist_id=c.stylist_id and b.status in ('pending','confirmed') and (b.status='confirmed' or b.hold_expires_at is null or b.hold_expires_at>now()) and b.starts_at<(end_slot at time zone 'Asia/Kolkata') and b.ends_at>(slot at time zone 'Asia/Kolkata')) as available from candidates c
  ), grouped as (select time,min(label) label,bool_or(available) available,min(stylist_id) filter(where available) "stylistId" from available group by time)
  select coalesce(jsonb_agg(to_jsonb(g)||jsonb_build_object('branchId',p_branch,'branchName',branch_row.name) order by time),'[]'::jsonb) into result from grouped g;
  return result;
@@ -261,7 +332,9 @@ create or replace function studioflow_android_private.slots(p_slug text,p_servic
 language plpgsql stable security definer set search_path='' as $$
 declare selected text:=nullif(current_setting('studioflow.branch_id',true),'');
 begin
- if selected is not null then return studioflow_private.branch_slots(p_slug,p_services,p_date,p_stylist,selected::uuid); end if;
+ if selected is not null then
+  return (select coalesce(jsonb_agg(s order by s->>'time'),'[]'::jsonb) from jsonb_array_elements(studioflow_private.branch_slots(p_slug,p_services,p_date,p_stylist,selected::uuid)) s where coalesce((s->>'available')::boolean,false));
+ end if;
  return studioflow_android_private.slots_unbranched(p_slug,p_services,p_date,p_stylist);
 end $$;
 revoke all on function studioflow_private.availability(text,text,date,text),studioflow_private.availability_unbranched(text,text,date,text),studioflow_android_private.slots(text,jsonb,date,text),studioflow_android_private.slots_unbranched(text,jsonb,date,text) from public,anon,authenticated;
@@ -295,9 +368,13 @@ grant execute on function public.studioflow_branch_specialists(text,text,uuid) t
 create or replace function public.studioflow_branch_available_slots(p_slug text,p_service_id text,p_date date,p_stylist text,p_branch uuid) returns jsonb
 language sql stable security invoker set search_path='' as $$select studioflow_private.branch_slots(p_slug,jsonb_build_array(p_service_id),p_date,p_stylist,p_branch)$$;
 create or replace function public.studioflow_branch_android_slots(p_slug text,p_services jsonb,p_date date,p_stylist text,p_branch uuid) returns jsonb
-language sql stable security invoker set search_path='' as $$select studioflow_private.branch_slots(p_slug,p_services,p_date,p_stylist,p_branch)$$;
+language sql stable security invoker set search_path='' as $$
+ select coalesce(jsonb_agg(s order by s->>'time'),'[]'::jsonb)
+ from jsonb_array_elements(studioflow_private.branch_slots(p_slug,p_services,p_date,p_stylist,p_branch)) s
+ where coalesce((s->>'available')::boolean,false)
+$$;
 revoke all on function public.studioflow_branch_available_slots(text,text,date,text,uuid),public.studioflow_branch_android_slots(text,jsonb,date,text,uuid) from public;
-grant execute on function public.studioflow_branch_available_slots(text,text,date,text,uuid),public.studioflow_branch_android_slots(text,jsonb,date,text,uuid) to anon,authenticated;
+grant execute on function public.studioflow_branch_available_slots(text,text,date,text,uuid),public.studioflow_branch_android_slots(text,jsonb,date,text,uuid) to anon,authenticated,service_role;
 
 create or replace function public.studioflow_branch_book(p_slug text,p_request jsonb) returns jsonb
 language plpgsql security invoker set search_path='' as $$
