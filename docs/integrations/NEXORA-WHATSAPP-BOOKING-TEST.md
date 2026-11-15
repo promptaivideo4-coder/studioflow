@@ -14,12 +14,12 @@ This is intentionally a test stage. Real WhatsApp booking creation needs a verif
 
 ## Deploy requirements
 
-1. Apply migration `20261115132100_studioflow_whatsapp_test_booking_api.sql` to the active StudioFlow Supabase project.
+1. Apply migrations `20261115132100_studioflow_whatsapp_test_booking_api.sql` and `20261115133000_private_whatsapp_test_rate_limit.sql` in timestamp order. The second migration safely renames the already-deployed server-only rate-limit RPC.
 2. Deploy Supabase Edge Function `studioflow-whatsapp-booking` with `verify_jwt = false`. The handler performs its own API-key authentication.
 3. In Supabase Dashboard → Edge Functions → Secrets, create `NEXORA_TAWK_BOOKING_API_KEY` with a random value of at least 32 characters. Do not put the value in GitHub, this file, client-side code, or chat.
 4. In Tawk AI Assist → Tools / Integrations → Add custom API, import the OpenAPI file at:
    `https://raw.githubusercontent.com/templateapp67-oss/studioflow/feat/whatsapp-booking-test-api/docs/integrations/nexora-whatsapp-booking.openapi.json`
-5. Configure the API key credential as header `X-NEXORA-BOOKING-KEY` using the same value created in Supabase secrets.
+5. Configure Tawk's HTTP Bearer authentication with the same value created in Supabase secrets. Tawk will send it as `Authorization: Bearer <key>`.
 6. Enable the integration for the NEXORA AI agent and test in AI Assist preview before testing from a second WhatsApp phone.
 
 ## Tawk AI agent instructions for test mode
@@ -45,7 +45,7 @@ Base URL:
 Health check:
 `GET /health` — reports whether server-side secrets are configured; no secret value is returned.
 
-Operations (all require `X-NEXORA-BOOKING-KEY`):
+Operations (all require `Authorization: Bearer <NEXORA_TAWK_BOOKING_API_KEY>`):
 - `POST /catalogue` — published services, staff and branches.
 - `POST /availability` — current live slots.
 - `POST /test-booking` — rechecks a slot and saves an isolated test record only.
