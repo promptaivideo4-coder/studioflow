@@ -106,7 +106,7 @@ function getServiceItems(content: JsonRecord, serviceIds: string[]) {
   };
 }
 
-async function getSalon(db: ReturnType<typeof createClient>, slug: string) {
+async function getSalon(db: any, slug: string) {
   const { data, error } = await db
     .from('studioflow_websites')
     .select('slug, owner_id, content')
@@ -116,7 +116,7 @@ async function getSalon(db: ReturnType<typeof createClient>, slug: string) {
   return data as { slug: string; owner_id: string; content: JsonRecord };
 }
 
-async function getActiveBranches(db: ReturnType<typeof createClient>, ownerId: string) {
+async function getActiveBranches(db: any, ownerId: string) {
   const { data, error } = await db
     .from('branches')
     .select('id, name, city')
@@ -128,7 +128,7 @@ async function getActiveBranches(db: ReturnType<typeof createClient>, ownerId: s
 }
 
 async function getAvailableSlots(
-  db: ReturnType<typeof createClient>,
+  db: any,
   input: { slug: string; serviceIds: string[]; date: string; stylistId: string; branchId?: string },
 ) {
   const rpc = input.branchId ? 'studioflow_branch_android_slots' : 'studioflow_android_slots';
@@ -177,7 +177,7 @@ function validateBaseInput(body: JsonRecord) {
 }
 
 async function claimTestQuota(
-  db: ReturnType<typeof createClient>,
+  db: any,
   ownerId: string,
   phoneHash: string,
 ) {
@@ -191,7 +191,7 @@ async function claimTestQuota(
   return { ok: true };
 }
 
-async function handleCatalogue(db: ReturnType<typeof createClient>, body: JsonRecord) {
+async function handleCatalogue(db: any, body: JsonRecord) {
   const slug = cleanText(body.slug, 80).toLowerCase();
   if (!/^[a-z0-9][a-z0-9-]{1,79}$/.test(slug)) return json({ ok: false, error: 'Choose a valid salon.' }, 400);
 
@@ -235,7 +235,7 @@ async function handleCatalogue(db: ReturnType<typeof createClient>, body: JsonRe
   });
 }
 
-async function handleAvailability(db: ReturnType<typeof createClient>, body: JsonRecord) {
+async function handleAvailability(db: any, body: JsonRecord) {
   const valid = validateBaseInput(body);
   if ('error' in valid) return json({ ok: false, error: valid.error }, 400);
 
@@ -281,7 +281,7 @@ async function handleAvailability(db: ReturnType<typeof createClient>, body: Jso
 }
 
 async function handleTestBooking(
-  db: ReturnType<typeof createClient>,
+  db: any,
   body: JsonRecord,
   apiKey: string,
 ) {
@@ -494,7 +494,7 @@ Deno.serve(async (req: Request) => {
       return json({ ok: false, error: 'Request body must be a JSON object.' }, 400);
     }
 
-    const db = createClient(supabaseUrl, serviceKey, {
+    const db = createClient<any>(supabaseUrl, serviceKey, {
       auth: { persistSession: false, autoRefreshToken: false },
       global: { headers: { 'X-NEXORA-Integration': 'tawk-whatsapp-test' } },
     });
