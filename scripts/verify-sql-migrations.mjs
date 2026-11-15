@@ -112,6 +112,11 @@ await db.exec(readFileSync('supabase/migrations/202611070006_nexora_landing_priv
 // Template 12 version and its branch-specific extension.
 await db.exec(readFileSync('supabase/migrations/20261113120946_template12_iron_ink.sql','utf8'));
 await db.exec(readFileSync('supabase/migrations/20261113120947_multibranch_template12_support.sql','utf8'));
+// NEXORA WhatsApp test mode: apply its private QA ledger and the follow-up
+// rename migration before the live-catalog scan. The limiter is intentionally
+// server-only (service_role grant only) and is not a browser-facing RPC.
+await db.exec(readFileSync('supabase/migrations/20261115132100_studioflow_whatsapp_test_booking_api.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261115133000_private_whatsapp_test_rate_limit.sql','utf8'));
 const rpcs=clientRpc(src);
 const froms=[...src.matchAll(/\.from\(\s*['"\`]([A-Za-z0-9_-]+)['"\`]/g)].map(m=>m[1]);
 const tables=froms.filter(n=>!n.includes('-'));
