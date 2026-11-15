@@ -12,6 +12,8 @@ assert.match(source, /constantTimeEqual/);
 assert.match(source, /studioflow_android_slots/);
 assert.match(source, /studioflow_branch_android_slots/);
 assert.match(source, /studioflow_edge_rate_limit_claim/);
+assert.match(source, /body\\.customerConfirmed !== true/);
+assert.match(source, /Choose a salon location before checking times/);
 assert.match(source, /studioflow_whatsapp_test_bookings/);
 assert.match(source, /calendarReserved:\s*false/);
 assert.match(source, /never log or echo raw customer messages, phone numbers, API keys or DB errors/i);
@@ -28,6 +30,7 @@ assert.equal(spec.openapi, '3.0.3');
 assert.equal(spec.components.securitySchemes.NexoraBookingKey.name, 'X-NEXORA-BOOKING-KEY');
 assert.ok(spec.paths['/catalogue'] && spec.paths['/availability'] && spec.paths['/test-booking']);
 assert.match(spec.paths['/test-booking'].post.description, /does NOT book the appointment/i);
+assert.ok(spec.components.schemas.TestBookingRequest.required.includes('customerConfirmed'));
 assert.match(docs, /has NOT been booked/i);
 
 console.log('PASS: WhatsApp test API auth, live availability RPC wiring, test-only persistence, RLS, idempotency, rate limit and OpenAPI contract.');
