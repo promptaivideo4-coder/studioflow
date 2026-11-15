@@ -8,8 +8,8 @@ const docs = readFileSync('docs/integrations/NEXORA-WHATSAPP-BOOKING-TEST.md', '
 const renameMigration = readFileSync('supabase/migrations/20261115133000_private_whatsapp_test_rate_limit.sql', 'utf8');
 
 assert.match(source, /NEXORA_TAWK_BOOKING_API_KEY/);
-assert.match(source, /headers\\.get\\('authorization'\\)/i);
-assert.match(source, /Bearer\\\\s\\+/i);
+assert.ok(source.includes("req.headers.get('authorization')"));
+assert.ok(source.includes("Bearer\\s+"));
 assert.match(source, /constantTimeEqual/);
 assert.match(source, /studioflow_android_slots/);
 assert.match(source, /studioflow_branch_android_slots/);
