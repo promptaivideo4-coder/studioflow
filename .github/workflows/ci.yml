@@ -37,3 +37,32 @@ jobs:
         env:
           VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
           VITE_SUPABASE_ANON_KEY: ${{ vars.VITE_SUPABASE_ANON_KEY }}
+
+  supabase-free-plan:
+    name: Supabase Free Plan migration validation
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v5
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install locked dependencies
+        run: npm ci
+
+      # Free Plan has no GitHub PR preview database. Validate the same
+      # migration and Edge Function contracts offline with PGlite; this job
+      # never creates a Supabase branch or connects to production.
+      - name: Verify WhatsApp test-mode contract
+        run: node scripts/verify-whatsapp-booking-api.mjs
+
+      - name: Verify Edge Function security boundaries
+        run: node scripts/verify-edge-functions.mjs
+
+      - name: Apply and verify SQL migrations offline
+        run: node scripts/verify-sql-migrations.mjs
