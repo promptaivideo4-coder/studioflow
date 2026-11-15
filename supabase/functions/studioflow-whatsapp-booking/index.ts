@@ -477,8 +477,8 @@ Deno.serve(async (req: Request) => {
 
   const expectedKey = Deno.env.get('NEXORA_TAWK_BOOKING_API_KEY') || '';
   const authorization = req.headers.get('authorization') || '';
-  const suppliedKey = authorization.replace(/^Bearer\\s+/i, '').trim();
-  if (!/^Bearer\\s+\\S+$/i.test(authorization)) return json({ ok: false, error: 'Unauthorized.' }, 401);
+  const suppliedKey = authorization.replace(/^Bearer\s+/i, '').trim();
+  if (!/^Bearer\s+\S+$/i.test(authorization)) return json({ ok: false, error: 'Unauthorized.' }, 401);
   if (expectedKey.length < 32) return json({ ok: false, error: 'WhatsApp booking integration is not configured yet.' }, 503);
   if (!constantTimeEqual(expectedKey, suppliedKey)) return json({ ok: false, error: 'Unauthorized.' }, 401);
 
