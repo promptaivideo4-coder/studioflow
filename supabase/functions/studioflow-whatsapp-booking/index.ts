@@ -318,31 +318,16 @@ async function handleTestBooking(
   if (!selected) return json({ ok: false, error: 'One of the selected services is no longer available.' }, 409);
 
   // Re-check the live calendar immediately before writing the test record.
-  const slots = await getAvailableSlots(db, {
-    slug: valid.slug,
-    serviceIds: valid.serviceIds,
-    date: valid.date,
-    stylistId: requestedStylist,
-    branchId,
-  });
-  if (!slots) return json({ ok: false, error: 'Live availability could not be checked. No test record was saved.' }, 503);
-
-  const chosen = slots.find((slot) => slot.time === time
-    && (requestedStylist === 'any' || slot.stylistId === requestedStylist));
-  if (!chosen) return json({ ok: false, error: 'That time is no longer available. Check the latest slots.', refreshAvailability: true }, 409);
-
-  const stylistId = chosen.stylistId;
-  const stylists = Array.isArray(salon.content.stylists) ? salon.content.stylists as JsonRecord[] : [];
-  const stylist = stylists.find((person) => person?.id === stylistId);
-  if (!stylist) return json({ ok: false, error: 'The selected specialist is no longer available.' }, 409);
-
   const phoneHash = await hmacHex(apiKey, customerPhone);
+  // Fingerprint the customer's requested choice (including "any"), not the
+  // server-selected stylist, so a safe retry returns the original test record
+  // even if the live slot is later taken by a real customer.
   const requestFingerprint = await hmacHex(apiKey, JSON.stringify({
     slug: valid.slug,
     serviceIds: valid.serviceIds,
     date: valid.date,
     time,
-    stylistId,
+    requestedStylist,
     branchId: branchId || null,
     customerName,
     customerPhone,
@@ -369,6 +354,26 @@ async function handleTestBooking(
       customerMessage: 'This was a test simulation only. No real appointment was booked and no slot was reserved.',
     });
   }
+
+  // Re-check the real calendar only for a new request. Idempotent retries above
+  // return the original response and do not create a second test record.
+  const slots = await getAvailableSlots(db, {
+    slug: valid.slug,
+    serviceIds: valid.serviceIds,
+    date: valid.date,
+    stylistId: requestedStylist,
+    branchId,
+  });
+  if (!slots) return json({ ok: false, error: 'Live availability could not be checked. No test record was saved.' }, 503);
+
+  const chosen = slots.find((slot) => slot.time === time
+    && (requestedStylist === 'any' || slot.stylistId === requestedStylist));
+  if (!chosen) return json({ ok: false, error: 'That time is no longer available. Check the latest slots.', refreshAvailability: true }, 409);
+
+  const stylistId = chosen.stylistId;
+  const stylists = Array.isArray(salon.content.stylists) ? salon.content.stylists as JsonRecord[] : [];
+  const stylist = stylists.find((person) => person?.id === stylistId);
+  if (!stylist) return json({ ok: false, error: 'The selected specialist is no longer available.' }, 409);
 
   const quota = await claimTestQuota(db, salon.owner_id, phoneHash);
   if ('error' in quota) return json({ ok: false, error: quota.error }, 429);
