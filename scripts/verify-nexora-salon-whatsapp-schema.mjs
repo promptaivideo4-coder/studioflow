@@ -44,6 +44,8 @@ assert.ok(guide.includes('studioflow_payment_orders'));
 assert.match(guide, /X-Hub-Signature-256/);
 assert.match(guide, /booking_source = 'whatsapp'/);
 assert.match(guide, /verified provider webhook\/signature/);
-assert.match(guide, /does not create a live Meta connection/);
+assert.ok(guide.includes('No salon WhatsApp number is connected yet'));
+assert.ok(guide.includes('Not live yet'));
+assert.ok(guide.includes('Meta app/configuration/approval'));
 
 console.log('NEXORA salon-owned WhatsApp schema contract passed.');
