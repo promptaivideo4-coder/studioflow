@@ -45,7 +45,7 @@ assert.equal(preflight.status, 204);
 assert.equal(preflight.headers.get('access-control-allow-origin'), 'https://nexorasalon.online');
 assert.equal((await connect.handler(new Request('https://test.invalid',{method:'POST'}))).status,401);
 
-function fakeDb(flow = {}) {
+function fakeDb(flow = {}, branches = []) {
   const state = { flow, status:'active', events:[], logs:[], calls:[], lastInbound:null };
   const conversation = () => ({owner_id:'owner-a',customer_wa_id:'919999999999',flow_state:state.flow,
     conversation_status:state.status,last_inbound_at:state.lastInbound});
@@ -76,10 +76,10 @@ function fakeDb(flow = {}) {
         }
         if(table==='salon_whatsapp_connections')return {data:filters.some(([key,value])=>key==='phone_number_id'&&value!=='123456')?null:connection};
         if(table==='studioflow_websites')return {data:{owner_id:'owner-a',slug:'salon-a',content:{services:[1,2,3].map(n=>({id:'svc-'+n,name:'Service '+n,price:100,durationMinutes:30}))}}};
-        if(table==='branches')return {data:[]};
-        if(table==='salon_whatsapp_message_log'){if(values)state.logs.push(values);return {data:[]};}
-        if(table==='studioflow_bookings')return {data:{id:'booking-a',owner_id:'owner-a',status:'pending',payload:{clientPhone:'+919999999999'}}};
-        if(table==='studioflow_payment_orders')return {data:{status:'created',payment_id:null}};
+        if(table==='branches')return {data:branches};
+        if(table==='salon_whatsapp_message_log'){if(values)state.logs.push(values);return {data:state.logs.filter(row=>filters.every(([k,v])=>Array.isArray(v)?v.includes(row[k]):row[k]===v))};}
+        if(table==='studioflow_bookings')return {data:state.booking || {id:'booking-a',owner_id:'owner-a',status:'pending',payload:{clientPhone:'+919999999999'}}};
+        if(table==='studioflow_payment_orders')return {data:state.ledger || {status:'created',payment_id:null}};
         throw new Error('Unexpected table '+table);
       }
       return q;
@@ -96,19 +96,21 @@ const key = await webcrypto.subtle.importKey('raw',Buffer.alloc(32),'AES-GCM',fa
 const iv = new Uint8Array(12);
 const cipher = await webcrypto.subtle.encrypt({name:'AES-GCM',iv},key,new TextEncoder().encode('test-only-token'));
 const connection={owner_id:'owner-a',phone_number_id:'123456',access_token_ciphertext:Buffer.from(cipher).toString('base64'),access_token_iv:Buffer.from(iv).toString('base64')};
-async function inbound(flow, text) {
-  const db=fakeDb(flow);
+async function inbound(flow, text, timestamp = String(Math.floor(Date.now()/1000)), branches = []) {
+  const db=fakeDb(flow, branches);
   const api=load('supabase/functions/nexora-whatsapp-webhook/index.ts',['handleInbound','notifyPayment'],db,
     async (url,init) => {
       assert.match(url,/123456\/messages$/);
       assert.equal(JSON.parse(init.body).to,'919999999999');
       return Response.json({messages:[{id:'wamid.test'}]});
     });
-  await api.handleInbound(db,connection,{from:'919999999999',id:'wamid.inbound',type:'text',timestamp:String(Math.floor(Date.now()/1000)),text:{body:text}},null);
+  await api.handleInbound(db,connection,{from:'919999999999',id:'wamid.inbound',type:'text',timestamp,text:{body:text}},null);
   return db.state;
 }
 assert.equal((await inbound({step:'choose_service'},'3')).flow.serviceId,'svc-3','3 must choose service, not hand off');
 assert.equal((await inbound({step:'choose_service'},'1garbage')).flow.step,'choose_service');
+const branches = [1,2,3].map(n=>({id:'branch-'+n,name:'Branch '+n}));
+assert.equal((await inbound({step:'choose_branch',serviceId:'svc-1',branches},'3',undefined,branches)).flow.branchId,'branch-3');
 const slots=Array.from({length:12},(_,i)=>({time:String(9+i).padStart(2,'0')+':30',stylistId:'staff-'+i}));
 assert.equal((await inbound({step:'choose_time',slots},'10:30')).flow.time,'10:30','exact HH:MM must not be parsed as slot 10');
 assert.equal((await inbound({step:'choose_time',slots},'3')).flow.stylistId,'staff-2');
@@ -116,9 +118,33 @@ assert.equal((await inbound({step:'menu'},'3')).flow.step,'handoff');
 assert.equal((await inbound({step:'choose_service'},'HELP')).flow.step,'handoff');
 assert.equal((await inbound({step:'opted_out',optOut:true},'HI')).logs.filter(row=>row.direction==='outbound').length,0);
 assert.equal((await inbound({step:'opted_out',optOut:true},'START')).flow.optOut,false);
+for (const timestamp of ['NaN', '-1', '1e9', '1.5', String(Math.floor(Date.now()/1000)+120)]) {
+  await assert.rejects(inbound({step:'menu'}, 'HI', timestamp), /timestamp/);
+}
 const db=fakeDb();
 const api=load('supabase/functions/nexora-whatsapp-webhook/index.ts',['notifyPayment'],db);
 assert.equal((await api.notifyPayment(db,'booking-a','pay_FAKE')).reason,'payment_not_verified');
+// A valid captured ledger still must not resend an accepted/delivered/read receipt.
+for (const delivery_status of ['sent','delivered','read']) {
+  const receiptDb=fakeDb();
+  receiptDb.state.booking={id:'booking-a',owner_id:'owner-a',status:'confirmed',payload:{paymentStatus:'paid_deposit',servicePrice:100}};
+  receiptDb.state.ledger={payment_id:'pay_OK',status:'captured',amount_paise:2500,currency:'INR'};
+  receiptDb.state.logs.push({id:'receipt',owner_id:'owner-a',booking_id:'booking-a',message_kind:'payment_success',delivery_status});
+  const receiptApi=load('supabase/functions/nexora-whatsapp-webhook/index.ts',['notifyPayment'],receiptDb);
+  assert.equal((await receiptApi.notifyPayment(receiptDb,'booking-a','pay_OK')).deduplicated,true);
+  receiptDb.state.ledger.amount_paise=2499;
+  assert.equal((await receiptApi.notifyPayment(receiptDb,'booking-a','pay_OK')).reason,'payment_not_verified');
+}
+const receiptDb=fakeDb({step:'payment_pending',bookingId:'booking-a'});
+receiptDb.state.lastInbound=new Date().toISOString();
+receiptDb.state.booking={id:'booking-a',owner_id:'owner-a',status:'confirmed',payload:{paymentStatus:'paid_deposit',servicePrice:100,clientPhone:'+919999999999'}};
+receiptDb.state.ledger={payment_id:'pay_OK',status:'captured',amount_paise:2500,currency:'INR'};
+const receiptApi=load('supabase/functions/nexora-whatsapp-webhook/index.ts',['notifyPayment'],receiptDb,
+  async()=>Response.json({messages:[{id:'wamid.receipt'}]}));
+assert.equal((await receiptApi.notifyPayment(receiptDb,'booking-a','pay_OK')).sent,true);
+assert.ok(receiptDb.state.calls.some(call=>call.table==='salon_whatsapp_conversations' && call.op==='update' &&
+  call.filters.some(([key,value])=>key==='flow_state' && value.bookingId==='booking-a')),
+  'receipt must compare the original flow state atomically, not overwrite a newer booking or STOP');
 connection.connection_status='pending';
 const replayDb=fakeDb();
 let sends=0;

@@ -78,7 +78,14 @@ Deno.serve(async(req:Request)=>{
       const {data:order,error}=await service.from('studioflow_payment_orders').select('*').eq('order_id',orderId).single();
       if(error)throw new Error('Payment order not found');
       const payment=await provider(`payments/${encodeURIComponent(paymentId)}`);
-      if(payment.order_id!==orderId||payment.currency!=='INR'||payment.amount!==order.amount_paise||payment.status!=='captured'){
+      // Payment Links must pass membership checks on every settlement path,
+      // including generic payment.captured events and authenticated polling.
+      if(order.payment_link_id){
+        const liveLink=await provider('payment_links/'+encodeURIComponent(order.payment_link_id));
+        verifiedLinkPaymentId(liveLink,order,paymentId);
+        verifyLinkPayment(payment,liveLink,order,paymentId);
+      }
+      if((!order.payment_link_id&&payment.order_id!==orderId)||payment.currency!=='INR'||payment.amount!==order.amount_paise||payment.status!=='captured'){
         throw new Error('Payment capture is pending or does not match the booking. Recheck payment status shortly.');
       }
       const result=await service.rpc('studioflow_settle_payment',{p_order:orderId,p_payment:paymentId,p_amount:payment.amount});
@@ -93,14 +100,6 @@ Deno.serve(async(req:Request)=>{
     if(webhookSignature){
       if(!creds.configured||!creds.webhookSecret)return respond({error:'Webhook configuration missing'},503);
       if(!await signatureMatches(creds.webhookSecret,raw,webhookSignature))return respond({error:'Invalid webhook signature'},401);
-      if(body.event==='payment_link.expired'||body.event==='payment_link.cancelled'){
-        const link=body.payload?.payment_link?.entity;
-        if(link?.id){
-          await service.from('studioflow_payment_orders')
-            .update({payment_link_status:body.event==='payment_link.expired'?'expired':'cancelled'})
-            .eq('payment_link_id',link.id).eq('status','created');
-        }
-      }
       if(body.event==='payment_link.paid'){
         const eventLink=body.payload?.payment_link?.entity;
         if(eventLink?.id&&eventLink.status==='paid'){

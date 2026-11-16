@@ -346,7 +346,7 @@ async function handleInbound(db: any, connection: Json, message: Json, contact: 
   }
 
   const providerTime = Number(message.timestamp) * 1000;
-  if (!Number.isFinite(providerTime) || providerTime <= 0 || providerTime > Date.now() + 60_000) {
+  if (!/^[0-9]{1,12}$/.test(String(message.timestamp)) || !Number.isSafeInteger(providerTime) || providerTime <= 0 || providerTime > Date.now() + 60_000) {
     throw new Error('Invalid WhatsApp message timestamp.');
   }
   const receivedAt = new Date(providerTime).toISOString();
@@ -697,10 +697,12 @@ async function notifyPayment(db: any, bookingId: string, paymentId: string) {
   if (bookingResult.error || !booking) return { sent: false, reason: 'booking_not_found' };
 
   const ledger = await db.from('studioflow_payment_orders')
-    .select('payment_id,status,amount_paise')
+    .select('payment_id,status,amount_paise,currency')
     .eq('booking_id', booking.id).maybeSingle();
   if (ledger.error || booking.status !== 'confirmed' || booking.payload?.paymentStatus !== 'paid_deposit' ||
-      ledger.data?.status !== 'captured' || ledger.data?.payment_id !== paymentId) {
+      ledger.data?.status !== 'captured' || ledger.data?.payment_id !== paymentId ||
+      ledger.data?.currency !== 'INR' || !Number.isSafeInteger(Number(ledger.data?.amount_paise)) ||
+      Number(ledger.data?.amount_paise) !== Math.ceil(Number(booking.payload?.servicePrice) * 25)) {
     return { sent: false, reason: 'payment_not_verified' };
   }
 
@@ -755,7 +757,8 @@ async function notifyPayment(db: any, bookingId: string, paymentId: string) {
       conversation_status: 'booked',
       flow_state: { step: 'booked', bookingId: booking.id },
       updated_at: new Date().toISOString(),
-    }).eq('owner_id', booking.owner_id).eq('customer_wa_id', recipient);
+    }).eq('owner_id', booking.owner_id).eq('customer_wa_id', recipient)
+      .eq('flow_state', conversation.data.flow_state);
   }
   return await sendSalonText(db, connection, booking.owner_id, recipient, text, 'payment_success', booking.id);
 }
