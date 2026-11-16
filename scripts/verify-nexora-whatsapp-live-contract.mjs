@@ -38,7 +38,7 @@ for (const required of [
 ]) assert.ok(webhook.includes(required), `WhatsApp webhook contract missing: ${required}`);
 
 assert.ok(webhook.includes("prior?.processing_status === 'processing'"), 'Webhook must not process an in-flight duplicate message twice');
-assert.ok(webhook.includes("row.booking_source !== 'whatsapp'"), 'Payment notices must be scoped to WhatsApp-originated bookings');
+assert.ok(webhook.includes("booking.booking_source !== 'whatsapp'"), 'Payment notices must be scoped to WhatsApp-originated bookings');
 assert.ok(webhook.includes("env('META_APP_SECRET')"), 'Meta raw-body signatures must use the Meta app secret');
 
 assert.ok(bookingSql.includes('alter column customer_id drop not null'), 'WhatsApp customer must not need an app login');
