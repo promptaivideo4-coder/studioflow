@@ -1,922 +1,839 @@
+// NEXORA salon-owned WhatsApp webhook and booking assistant.
+// Meta's signature is checked over the exact raw body before parsing.
 import { createClient } from 'npm:@supabase/supabase-js@2.117.3';
 
-type Row = Record<string, unknown>;
-type Connection = {
-  owner_id: string;
-  phone_number_id: string;
-  waba_id: string;
-  access_token_ciphertext: string;
-  access_token_iv: string;
-  token_key_version: number;
-  connection_status: string;
-};
+type Json = Record<string, any>;
+const GRAPH_VERSION = (Deno.env.get('META_GRAPH_API_VERSION') || 'v27.0').trim();
+const encoder = new TextEncoder();
 
-const corsOrigins = new Set([
-  'https://nexorasalon.online',
-  'https://www.nexorasalon.online',
-  'http://localhost:5173',
-]);
-
-function cors(request: Request) {
-  const origin = request.headers.get('origin') || '';
-  return corsOrigins.has(origin) ? {
-    'Access-Control-Allow-Origin': origin,
-    'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-client-info',
-    'Access-Control-Allow-Methods': 'POST, OPTIONS',
-    'Vary': 'Origin',
-  } : {};
-}
-
-function response(body: unknown, status = 200, headers: HeadersInit = {}) {
-  return new Response(typeof body === 'string' ? body : JSON.stringify(body), {
+function json(body: unknown, status = 200) {
+  return new Response(JSON.stringify(body), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store', ...headers },
+    headers: { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' },
   });
 }
-
-function env(name: string) {
-  return (Deno.env.get(name) || '').trim();
-}
-
-function safeEqual(left: string, right: string) {
-  const a = new TextEncoder().encode(left);
-  const b = new TextEncoder().encode(right);
-  let diff = a.length ^ b.length;
-  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a[i] ?? 0) ^ (b[i] ?? 0);
-  return diff === 0;
-}
-
-function bytesFromBase64(value: string) {
-  const binary = atob(value.replace(/-/g, '+').replace(/_/g, '/').padEnd(Math.ceil(value.length / 4) * 4, '='));
-  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
-}
-
-function tokenKey() {
-  const raw = env('META_TOKEN_ENCRYPTION_KEY');
-  if (!raw) throw new Error('WhatsApp token encryption is not configured.');
-  let bytes: Uint8Array;
-  if (/^[0-9a-f]{64}$/i.test(raw)) {
-    bytes = new Uint8Array(raw.match(/.{2}/g)!.map((part) => parseInt(part, 16)));
-  } else {
-    bytes = bytesFromBase64(raw);
-  }
-  if (bytes.length !== 32) throw new Error('WhatsApp token encryption key must be 32 bytes.');
-  return bytes;
-}
-
-async function decryptToken(connection: Connection) {
-  if (connection.token_key_version !== 1) throw new Error('Unsupported WhatsApp token key version.');
-  const key = await crypto.subtle.importKey('raw', tokenKey(), 'AES-GCM', false, ['decrypt']);
-  const clear = await crypto.subtle.decrypt(
-    { name: 'AES-GCM', iv: bytesFromBase64(connection.access_token_iv) },
-    key,
-    bytesFromBase64(connection.access_token_ciphertext),
-  );
-  return new TextDecoder().decode(clear);
-}
-
-async function hmacHex(secret: string, value: string) {
-  const key = await crypto.subtle.importKey('raw', new TextEncoder().encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
-  const digest = new Uint8Array(await crypto.subtle.sign('HMAC', key, new TextEncoder().encode(value)));
-  return Array.from(digest, (byte) => byte.toString(16).padStart(2, '0')).join('');
-}
-
-async function signatureMatches(raw: string, signature: string) {
-  const secret = env('META_APP_SECRET');
-  if (!secret || !/^sha256=[a-f0-9]{64}$/i.test(signature)) return false;
-  return safeEqual('sha256=' + await hmacHex(secret, raw), signature.toLowerCase());
-}
-
-function graphUrl(path: string) {
-  const version = env('META_GRAPH_API_VERSION');
-  if (!/^v\d+\.\d+$/.test(version)) throw new Error('META_GRAPH_API_VERSION is not configured correctly.');
-  return `https://graph.facebook.com/${version}/${path.replace(/^\//, '')}`;
-}
-
-async function graphSend(connection: Connection, to: string, payload: Row) {
-  const token = await decryptToken(connection);
-  const result = await fetch(graphUrl(`${connection.phone_number_id}/messages`), {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ messaging_product: 'whatsapp', recipient_type: 'individual', to, ...payload }),
-    signal: AbortSignal.timeout(20000),
-  });
-  const data = await result.json().catch(() => ({})) as Row;
-  if (!result.ok) {
-    const error = data.error as Row | undefined;
-    throw Object.assign(new Error(typeof error?.message === 'string' ? error.message : 'WhatsApp message could not be sent.'), {
-      code: String(error?.code || 'META_SEND_FAILED'),
-    });
-  }
-  const messages = Array.isArray(data.messages) ? data.messages as Row[] : [];
-  return String(messages[0]?.id || '');
-}
-
-async function logOutbound(
-  service: any,
-  connection: Connection,
-  to: string,
-  kind: string,
-  body: string,
-  options: { bookingId?: string | null; paymentBookingId?: string | null; templateName?: string | null; metadata?: Row } = {},
-) {
-  const { data: row, error: insertError } = await service
-    .from('salon_whatsapp_message_log')
-    .insert({
-      owner_id: connection.owner_id,
-      salon_id: null,
-      booking_id: options.bookingId || null,
-      studioflow_payment_booking_id: options.paymentBookingId || null,
-      direction: 'outbound',
-      recipient_wa_id: to,
-      message_kind: kind,
-      delivery_status: 'queued',
-      template_name: options.templateName || null,
-      metadata: { body, ...(options.metadata || {}) },
-    })
-    .select('id')
-    .single();
-  if (insertError || !row) throw new Error('Could not record the WhatsApp message before sending.');
-  try {
-    const messageId = await graphSend(connection, to, { type: 'text', text: { preview_url: false, body } });
-    await service.from('salon_whatsapp_message_log')
-      .update({ provider_message_id: messageId || null, delivery_status: 'sent', updated_at: new Date().toISOString() })
-      .eq('id', row.id);
-    return messageId;
-  } catch (error) {
-    const code = typeof (error as Row)?.code === 'string' ? String((error as Row).code).slice(0, 80) : 'META_SEND_FAILED';
-    await service.from('salon_whatsapp_message_log')
-      .update({ delivery_status: 'failed', error_code: code, updated_at: new Date().toISOString() })
-      .eq('id', row.id);
-    throw error;
-  }
-}
-
-async function logTemplate(
-  service: any,
-  connection: Connection,
-  to: string,
-  templateName: string,
-  parameters: string[],
-  bookingId: string,
-) {
-  const { data: row, error: insertError } = await service
-    .from('salon_whatsapp_message_log')
-    .insert({
-      owner_id: connection.owner_id,
-      salon_id: null,
-      booking_id: bookingId,
-      studioflow_payment_booking_id: bookingId,
-      direction: 'outbound',
-      recipient_wa_id: to,
-      message_kind: 'payment_success',
-      delivery_status: 'queued',
-      template_name: templateName,
-      metadata: { templateParameters: parameters },
-    })
-    .select('id')
-    .single();
-  if (insertError || !row) throw new Error('Could not record WhatsApp payment confirmation.');
-  try {
-    const token = await decryptToken(connection);
-    const result = await fetch(graphUrl(`${connection.phone_number_id}/messages`), {
-      method: 'POST',
-      headers: { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messaging_product: 'whatsapp',
-        to,
-        type: 'template',
-        template: {
-          name: templateName,
-          language: { code: env('META_WHATSAPP_TEMPLATE_LANGUAGE') || 'en_IN' },
-          components: [{
-            type: 'body',
-            parameters: parameters.map((text) => ({ type: 'text', text })),
-          }],
-        },
-      }),
-      signal: AbortSignal.timeout(20000),
-    });
-    const data = await result.json().catch(() => ({})) as Row;
-    if (!result.ok) {
-      const apiError = data.error as Row | undefined;
-      throw Object.assign(new Error(typeof apiError?.message === 'string' ? apiError.message : 'WhatsApp template message failed.'), {
-        code: String(apiError?.code || 'META_TEMPLATE_FAILED'),
-      });
-    }
-    const messages = Array.isArray(data.messages) ? data.messages as Row[] : [];
-    const messageId = String(messages[0]?.id || '');
-    await service.from('salon_whatsapp_message_log')
-      .update({ provider_message_id: messageId || null, delivery_status: 'sent', updated_at: new Date().toISOString() })
-      .eq('id', row.id);
-  } catch (error) {
-    const code = typeof (error as Row)?.code === 'string' ? String((error as Row).code).slice(0, 80) : 'META_TEMPLATE_FAILED';
-    await service.from('salon_whatsapp_message_log')
-      .update({ delivery_status: 'failed', error_code: code, updated_at: new Date().toISOString() })
-      .eq('id', row.id);
-    throw error;
-  }
-}
-
-async function getConnectionByPhone(service: any, phoneNumberId: string) {
-  const { data, error } = await service
-    .from('salon_whatsapp_connections')
-    .select('owner_id,phone_number_id,waba_id,access_token_ciphertext,access_token_iv,token_key_version,connection_status')
-    .eq('phone_number_id', phoneNumberId)
-    .eq('connection_status', 'connected')
-    .eq('webhook_subscribed', true)
-    .maybeSingle();
-  if (error || !data) return null;
-  return data as Connection;
-}
-
-function cleanText(value: unknown, max = 400) {
+function env(name: string) { return (Deno.env.get(name) || '').trim(); }
+function safeText(value: unknown, max = 500) {
   return typeof value === 'string' ? value.replace(/[\u0000-\u001f\u007f]/g, ' ').trim().slice(0, max) : '';
 }
-
-function normalizePhone(waId: string) {
-  return /^\d{8,15}$/.test(waId) ? '+' + waId : '';
-}
-
-function parseChoice(value: string, count: number) {
-  const match = value.trim().match(/^([1-9]\d*)$/);
-  if (!match) return -1;
-  const position = Number(match[1]) - 1;
-  return position >= 0 && position < count ? position : -1;
-}
-
+function digits(value: unknown) { return safeText(value, 32).replace(/[^0-9]/g, ''); }
 function validDate(value: string) {
   if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
-  const date = new Date(value + 'T00:00:00+05:30');
-  if (!Number.isFinite(date.getTime())) return false;
-  return date.toISOString().slice(0, 10) === value
-    && date.getTime() > Date.now()
-    && date.getTime() <= Date.now() + 90 * 24 * 60 * 60 * 1000;
+  const parsed = new Date(value + 'T00:00:00.000Z');
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === value;
 }
-
-async function getSalon(service: any, ownerId: string) {
-  const { data, error } = await service
-    .from('studioflow_websites')
-    .select('slug,content')
-    .eq('owner_id', ownerId)
-    .maybeSingle();
-  if (error || !data) throw new Error('The salon website is not published.');
-  return data as { slug: string; content: Row };
+function validTime(value: string) { return /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value); }
+function decodeBase64(value: string) {
+  const binary = atob(value);
+  return Uint8Array.from(binary, (character) => character.charCodeAt(0));
 }
-
-async function getCatalogue(service: any, ownerId: string) {
-  const website = await getSalon(service, ownerId);
-  const rawServices = Array.isArray(website.content.services) ? website.content.services as Row[] : [];
-  const services = rawServices.filter((item) => item && cleanText(item.id, 120) && cleanText(item.name, 120))
-    .map((item) => ({
-      id: String(item.id),
-      name: cleanText(item.name, 120),
-      price: Number(item.price || 0),
-      durationMinutes: Number(item.durationMinutes || 0),
-    }))
-    .filter((item) => Number.isFinite(item.price) && item.price >= 0 && Number.isInteger(item.durationMinutes) && item.durationMinutes > 0)
-    .slice(0, 9);
-  const { data: branches, error } = await service
-    .from('branches')
-    .select('id,name,city')
-    .eq('site_id', ownerId)
-    .eq('is_active', true)
-    .order('created_at', { ascending: true });
-  if (error) throw new Error('The salon locations could not be loaded.');
-  const stylists = Array.isArray(website.content.stylists) ? website.content.stylists as Row[] : [];
-  return {
-    website,
-    services,
-    branches: (branches || []) as Array<{ id: string; name: string; city: string }>,
-    stylists,
-    businessName: cleanText((website.content.profile as Row | undefined)?.businessName, 120) || 'Your salon',
-  };
+function constantTimeEqual(left: string, right: string) {
+  const a = encoder.encode(left);
+  const b = encoder.encode(right);
+  let diff = a.length ^ b.length;
+  for (let i = 0; i < Math.max(a.length, b.length); i++) diff |= (a[i] || 0) ^ (b[i] || 0);
+  return diff === 0;
 }
-
-async function saveConversation(service: any, ownerId: string, waId: string, patch: Row) {
-  const { data: existing } = await service
-    .from('salon_whatsapp_conversations')
-    .select('id,flow_state,is_opted_out')
-    .eq('owner_id', ownerId)
-    .eq('customer_wa_id', waId)
-    .maybeSingle();
-  if (!existing) {
-    const { data, error } = await service.from('salon_whatsapp_conversations').insert({
-      owner_id: ownerId,
-      salon_id: null,
-      customer_wa_id: waId,
-      conversation_status: 'active',
-      flow_state: {},
-      ...patch,
-    }).select().single();
-    if (error || !data) throw new Error('Could not start the WhatsApp booking conversation.');
-    return data as Row;
+async function hmacHex(secret: string, value: string) {
+  const key = await crypto.subtle.importKey('raw', encoder.encode(secret), { name: 'HMAC', hash: 'SHA-256' }, false, ['sign']);
+  const signed = await crypto.subtle.sign('HMAC', key, encoder.encode(value));
+  return Array.from(new Uint8Array(signed), (byte) => byte.toString(16).padStart(2, '0')).join('');
+}
+async function vaultSecret(db: any, name: string) {
+  const result = await db.rpc('nexora_whatsapp_meta_secret', { p_secret_name: name });
+  if (result.error || typeof result.data !== 'string' || !result.data) throw new Error('WhatsApp Meta secret is missing from Supabase Vault.');
+  return result.data;
+}
+async function decryptConnectionToken(db: any, connection: Json) {
+  const keyResult = await db.rpc('nexora_whatsapp_token_key');
+  if (keyResult.error || typeof keyResult.data !== 'string' || !keyResult.data) throw new Error('WhatsApp token encryption key is unavailable.');
+  const keyBytes = decodeBase64(keyResult.data);
+  if (keyBytes.length !== 32) throw new Error('WhatsApp token encryption key must decode to 32 bytes.');
+  const key = await crypto.subtle.importKey('raw', keyBytes, { name: 'AES-GCM' }, false, ['decrypt']);
+  const plaintext = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: decodeBase64(connection.access_token_iv) },
+    key,
+    decodeBase64(connection.access_token_ciphertext),
+  );
+  return new TextDecoder().decode(plaintext);
+}
+async function graphSend(phoneNumberId: string, token: string, recipient: string, text: string) {
+  const response = await fetch('https://graph.facebook.com/' + GRAPH_VERSION + '/' + phoneNumberId + '/messages', {
+    method: 'POST',
+    headers: { Authorization: 'Bearer ' + token, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      messaging_product: 'whatsapp',
+      recipient_type: 'individual',
+      to: recipient,
+      type: 'text',
+      text: { preview_url: true, body: text.slice(0, 4000) },
+    }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const payload = await response.json().catch(() => ({}));
+  if (!response.ok) throw new Error(safeText(payload?.error?.message, 300) || 'WhatsApp message could not be sent.');
+  return payload as Json;
+}
+async function getConnection(db: any, phoneNumberId: string) {
+  const result = await db.from('salon_whatsapp_connections').select('*')
+    .eq('phone_number_id', phoneNumberId).eq('connection_status', 'connected')
+    .eq('webhook_subscribed', true).maybeSingle();
+  return result.error || !result.data ? null : result.data as Json;
+}
+async function getWebsite(db: any, ownerId: string) {
+  const result = await db.from('studioflow_websites').select('owner_id,slug,content,published_at')
+    .eq('owner_id', ownerId).order('published_at', { ascending: false }).limit(1).maybeSingle();
+  return result.error || !result.data ? null : result.data as Json;
+}
+async function logMessage(db: any, row: Json) {
+  const result = await db.from('salon_whatsapp_message_log').insert(row);
+  if (result.error && result.error.code !== '23505') throw new Error('WhatsApp message could not be recorded.');
+}
+async function saveConversation(db: any, conversation: Json, flow: Json, status = 'active') {
+  const result = await db.from('salon_whatsapp_conversations').upsert({
+    owner_id: conversation.owner_id,
+    salon_id: null,
+    customer_wa_id: conversation.customer_wa_id,
+    customer_name: conversation.customer_name || null,
+    conversation_status: status,
+    flow_state: flow,
+    last_inbound_at: conversation.last_inbound_at || new Date().toISOString(),
+    last_outbound_at: conversation.last_outbound_at || null,
+    updated_at: new Date().toISOString(),
+  }, { onConflict: 'owner_id,customer_wa_id' });
+  if (result.error) throw new Error('WhatsApp conversation could not be saved.');
+}
+async function sendSalonText(db: any, connection: Json, ownerId: string, recipient: string, text: string, kind = 'conversation', bookingId: string | null = null) {
+  const session = await db.from('salon_whatsapp_conversations').select('last_inbound_at')
+    .eq('owner_id', ownerId).eq('customer_wa_id', recipient).maybeSingle();
+  const lastInbound = session.data?.last_inbound_at ? new Date(session.data.last_inbound_at).getTime() : 0;
+  if (!lastInbound || Date.now() - lastInbound > 24 * 60 * 60 * 1000) {
+    await logMessage(db, {
+      owner_id: ownerId, booking_id: bookingId, direction: 'outbound',
+      recipient_wa_id: recipient, message_kind: kind, delivery_status: 'failed',
+      error_code: 'customer_service_window_closed',
+      metadata: { reason: 'A Meta-approved template is required outside the 24-hour customer service window.' },
+    });
+    return { sent: false, reason: 'customer_service_window_closed' };
   }
-  const { data, error } = await service.from('salon_whatsapp_conversations')
-    .update({ ...patch, updated_at: new Date().toISOString() })
-    .eq('id', existing.id)
-    .select()
-    .single();
-  if (error || !data) throw new Error('Could not save the WhatsApp booking conversation.');
-  return data as Row;
+  const token = await decryptConnectionToken(db, connection);
+  const result = await graphSend(connection.phone_number_id, token, recipient, text);
+  const messageId = result.messages?.[0]?.id;
+  await logMessage(db, {
+    owner_id: ownerId,
+    booking_id: bookingId,
+    provider_message_id: typeof messageId === 'string' ? messageId : null,
+    direction: 'outbound',
+    recipient_wa_id: recipient,
+    message_kind: kind,
+    delivery_status: 'sent',
+    metadata: { message: text.slice(0, 4000) },
+  });
+  await db.from('salon_whatsapp_conversations').update({
+    last_outbound_at: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
+  }).eq('owner_id', ownerId).eq('customer_wa_id', recipient);
+  return { sent: true, messageId };
 }
-
-async function getAvailableSlots(
-  service: any,
-  slug: string,
-  serviceId: string,
-  date: string,
-  branchId: string | null,
-) {
-  const args = branchId ? {
-    p_slug: slug,
-    p_services: [serviceId],
-    p_date: date,
-    p_stylist: 'any',
-    p_branch: branchId,
-  } : {
-    p_slug: slug,
-    p_services: [serviceId],
-    p_date: date,
-    p_stylist: 'any',
-  };
-  const { data, error } = await service.rpc(branchId ? 'studioflow_branch_android_slots' : 'studioflow_android_slots', args);
-  if (error || !Array.isArray(data)) throw new Error('Live availability is temporarily unavailable. Please try again.');
-  return (data as Row[]).filter((slot) => slot && typeof slot.time === 'string' && typeof slot.stylistId === 'string'
-    && (!('available' in slot) || slot.available === true));
+function extractText(message: Json) {
+  if (message.type === 'text') return safeText(message.text?.body, 1000);
+  if (message.type === 'button') return safeText(message.button?.text || message.button?.payload, 300);
+  if (message.type === 'interactive') {
+    return safeText(
+      message.interactive?.button_reply?.id || message.interactive?.button_reply?.title ||
+      message.interactive?.list_reply?.id || message.interactive?.list_reply?.title, 300,
+    );
+  }
+  return safeText(message.caption, 500);
 }
-
-function menuText(name: string, services: Array<{ id: string; name: string; price: number; durationMinutes: number }>) {
-  const menu = services.slice(0, 9).map((service, index) =>
-    `${index + 1}. ${service.name} — ₹${Math.round(service.price).toLocaleString('en-IN')} (${service.durationMinutes} min)`
+function getServices(content: Json) {
+  const items = Array.isArray(content.services) ? content.services : [];
+  return items.filter((item: Json) =>
+    item && item.id && item.name && item.isActive !== false && item.isAvailable !== false &&
+    Number.isFinite(Number(item.price)) && Number(item.price) >= 0 &&
+    Number.isFinite(Number(item.durationMinutes)) && Number(item.durationMinutes) > 0
+  ).slice(0, 30) as Json[];
+}
+function formatServices(services: Json[]) {
+  return services.map((item, index) =>
+    String(index + 1) + '. ' + safeText(item.name, 100) + ' – ₹' +
+    Number(item.price).toLocaleString('en-IN') + ' (' + Number(item.durationMinutes) + ' min)'
   ).join('\n');
-  return `Namaste! Welcome to ${name}.\n\nBooking ke liye service ka number reply karein:\n${menu}\n\nAap STOP bhej kar WhatsApp booking messages band kar sakte hain.`;
+}
+function menuText(salonName: string, services: Json[]) {
+  return 'Namaste! Welcome to ' + salonName + '. 😊\n\nReply:\n1 – View services and prices\n2 – Book an appointment\n3 – Talk to the salon team\n\n' +
+    'Services:\n' + formatServices(services) + '\n\nReply STOP any time to stop WhatsApp messages.';
+}
+async function createWhatsAppPaymentLink(bookingId: string) {
+  const base = env('SUPABASE_URL');
+  const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (!base || !serviceKey) return { ok: false, reason: 'payment_service_not_configured' };
+  const response = await fetch(base + '/functions/v1/studioflow-payments', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + serviceKey,
+      apikey: serviceKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ action: 'whatsappPaymentLink', bookingId }),
+    signal: AbortSignal.timeout(20000),
+  });
+  const result = await response.json().catch(() => ({}));
+  if (!response.ok || !result.paymentLinkUrl) {
+    return { ok: false, reason: safeText(result.error, 300) || 'payment_link_not_created' };
+  }
+  return { ok: true, ...result };
+}
+async function ensureWhatsAppCustomer(db: any, phoneDigits: string, customerName: string) {
+  const phone = '+' + phoneDigits;
+  const existing = await db.rpc('nexora_whatsapp_find_customer', { p_phone: phone });
+  if (typeof existing.data === 'string') return existing.data;
+
+  // An inbound WhatsApp message proves control of this exact phone number.
+  // Create a minimal phone-confirmed customer identity only after the user
+  // explicitly confirms the booking; no password or invented email is created.
+  const userMetadata: Json = {
+    full_name: safeText(customerName, 150),
+    signup_source: 'whatsapp_booking',
+  };
+  // Existing customer signup trigger accepts Indian WhatsApp numbers in +91 format.
+  if (/^\+91[1-9][0-9]{9}$/.test(phone)) userMetadata.whatsapp_number = phone;
+
+  const created = await db.auth.admin.createUser({
+    phone,
+    phone_confirm: true,
+    user_metadata: userMetadata,
+  });
+  if (created.error) {
+    const retry = await db.rpc('nexora_whatsapp_find_customer', { p_phone: phone });
+    if (typeof retry.data === 'string') return retry.data;
+    throw new Error(safeText(created.error.message, 250) || 'Customer account could not be created.');
+  }
+  const customerId = created.data?.user?.id;
+  if (typeof customerId !== 'string') throw new Error('Customer account was not returned by Supabase Auth.');
+  return customerId;
 }
 
-async function processCustomerMessage(
-  service: any,
-  connection: Connection,
-  message: Row,
-  contactName: string,
-) {
-  const waId = cleanText(message.from, 20);
-  const messageId = cleanText(message.id, 180);
-  if (!/^\d{8,15}$/.test(waId) || !messageId) return;
-  const text = cleanText((message.text as Row | undefined)?.body, 1000);
-  if (!text) {
-    await logOutbound(service, connection, waId, 'conversation', 'Please reply with text to continue your booking. Type MENU to see services.');
-    return;
-  }
+async function cancelWhatsAppPaymentLink(bookingId: string) {
+  const base = env('SUPABASE_URL');
+  const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (!base || !serviceKey) return { ok: false, reason: 'payment_service_not_configured' };
+  const response = await fetch(base + '/functions/v1/studioflow-payments', {
+    method: 'POST',
+    headers: {
+      Authorization: 'Bearer ' + serviceKey,
+      apikey: serviceKey,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ action: 'whatsappCancelPaymentLink', bookingId }),
+    signal: AbortSignal.timeout(15000),
+  });
+  const result = await response.json().catch(() => ({}));
+  return response.ok ? { ok: true, ...result } : { ok: false, reason: safeText(result.error, 300) || 'payment_link_cancel_failed' };
+}
 
-  const { data: event, error: eventError } = await service
-    .from('salon_whatsapp_webhook_events')
-    .insert({
-      provider_event_id: messageId,
-      phone_number_id: connection.phone_number_id,
-      salon_id: null,
-      owner_id: connection.owner_id,
-      event_type: 'customer_message',
-      payload: { from: waId, messageType: message.type || 'unknown', text },
-      processing_status: 'processing',
-    })
-    .select('id')
-    .maybeSingle();
-  if (eventError && String(eventError.code) === '23505') {
-    const { data: prior } = await service.from('salon_whatsapp_webhook_events')
-      .select('id,processing_status')
-      .eq('provider_event_id', messageId)
-      .maybeSingle();
-    if (prior?.processing_status === 'processed' || prior?.processing_status === 'ignored' || prior?.processing_status === 'processing') return;
-    if (prior?.id) {
-      await service.from('salon_whatsapp_webhook_events').update({ processing_status: 'processing', error_code: null }).eq('id', prior.id);
-    } else return;
-  } else if (eventError || !event) {
-    return;
-  }
-
+async function processBooking(db: any, connection: Json, conversation: Json, flow: Json, website: Json, sender: string) {
+  let customerId: string;
   try {
-    const lower = text.toLowerCase().trim();
-    const { data: current } = await service
-      .from('salon_whatsapp_conversations')
-      .select('*')
-      .eq('owner_id', connection.owner_id)
-      .eq('customer_wa_id', waId)
-      .maybeSingle();
-
-    if (lower === 'stop' || lower === 'unsubscribe') {
-      await saveConversation(service, connection.owner_id, waId, {
-        is_opted_out: true,
-        opted_out_at: new Date().toISOString(),
-        conversation_status: 'closed',
-        flow_state: { stage: 'opted_out' },
-        last_message_id: messageId,
-        last_inbound_at: new Date().toISOString(),
-      });
-      await logOutbound(service, connection, waId, 'conversation', 'Aapko WhatsApp booking messages se opt out kar diya gaya hai. Dobara shuru karne ke liye START bhejein.');
-      await service.from('salon_whatsapp_message_log').insert({
-        owner_id: connection.owner_id, salon_id: null, direction: 'inbound', recipient_wa_id: waId,
-        message_kind: 'conversation', delivery_status: 'received', metadata: { text, messageId, optedOut: true },
-      });
-      return;
-    }
-
-    if (current?.is_opted_out && lower !== 'start') {
-      await service.from('salon_whatsapp_webhook_events').update({ processing_status: 'ignored', processed_at: new Date().toISOString() }).eq('provider_event_id', messageId);
-      return;
-    }
-
-    const catalogue = await getCatalogue(service, connection.owner_id);
-    let flow = (current?.flow_state && typeof current.flow_state === 'object' ? current.flow_state : {}) as Row;
-    let stage = typeof flow.stage === 'string' ? flow.stage : '';
-    if (lower === 'start' || lower === 'menu' || lower === 'book' || lower === 'hi' || lower === 'hello' || !stage || stage === 'opted_out' || stage === 'booked') {
-      flow = { stage: 'choose_service' };
-      await saveConversation(service, connection.owner_id, waId, {
-        customer_name: contactName || current?.customer_name || null,
-        is_opted_out: false,
-        opted_out_at: null,
-        consent_recorded_at: current?.consent_recorded_at || new Date().toISOString(),
-        conversation_status: 'active',
-        flow_state: flow,
-        last_inbound_at: new Date().toISOString(),
-        last_message_id: messageId,
-      });
-      await logOutbound(service, connection, waId, 'conversation', menuText(catalogue.businessName, catalogue.services));
-    } else if (stage === 'choose_service') {
-      const position = parseChoice(text, catalogue.services.length);
-      const serviceChoice = position >= 0 ? catalogue.services[position] : catalogue.services.find((item) => item.name.toLowerCase() === lower);
-      if (!serviceChoice) {
-        await logOutbound(service, connection, waId, 'conversation', `Service number sahi nahi hai.\n\n${menuText(catalogue.businessName, catalogue.services)}`);
-      } else {
-        flow = { ...flow, stage: 'choose_branch', serviceId: serviceChoice.id, serviceName: serviceChoice.name };
-        if (catalogue.branches.length > 1) {
-          const options = catalogue.branches.map((branch, index) => `${index + 1}. ${branch.name} — ${branch.city}`).join('\n');
-          await saveConversation(service, connection.owner_id, waId, {
-            customer_name: contactName || current?.customer_name || null,
-            conversation_status: 'active',
-            flow_state: flow,
-            last_inbound_at: new Date().toISOString(),
-            last_message_id: messageId,
-          });
-          await logOutbound(service, connection, waId, 'conversation', `Aapne ${serviceChoice.name} chuna hai. Branch number select karein:\n${options}`);
-        } else {
-          flow = { ...flow, stage: 'choose_date', branchId: catalogue.branches[0]?.id || null, branchName: catalogue.branches[0]?.name || null };
-          await saveConversation(service, connection.owner_id, waId, {
-            customer_name: contactName || current?.customer_name || null,
-            conversation_status: 'active',
-            flow_state: flow,
-            last_inbound_at: new Date().toISOString(),
-            last_message_id: messageId,
-          });
-          await logOutbound(service, connection, waId, 'conversation', `Aapne ${serviceChoice.name} chuna hai. Appointment date bhejein (YYYY-MM-DD).`);
-        }
-      }
-    } else if (stage === 'choose_branch') {
-      const position = parseChoice(text, catalogue.branches.length);
-      if (position < 0) {
-        const options = catalogue.branches.map((branch, index) => `${index + 1}. ${branch.name} — ${branch.city}`).join('\n');
-        await logOutbound(service, connection, waId, 'conversation', `Branch number sahi nahi hai.\n${options}`);
-      } else {
-        const branch = catalogue.branches[position];
-        flow = { ...flow, stage: 'choose_date', branchId: branch.id, branchName: branch.name };
-        await saveConversation(service, connection.owner_id, waId, {
-          customer_name: contactName || current?.customer_name || null,
-          conversation_status: 'active',
-          flow_state: flow,
-          last_inbound_at: new Date().toISOString(),
-          last_message_id: messageId,
-        });
-        await logOutbound(service, connection, waId, 'conversation', `Branch ${branch.name} select ho gayi. Appointment date bhejein (YYYY-MM-DD).`);
-      }
-    } else if (stage === 'choose_date') {
-      if (!validDate(text)) {
-        await logOutbound(service, connection, waId, 'conversation', 'Date YYYY-MM-DD format mein bhejein. Aaj se agle 90 din tak date choose kar sakte hain.');
-      } else {
-        const slots = await getAvailableSlots(service, catalogue.website.slug, String(flow.serviceId), text, typeof flow.branchId === 'string' ? flow.branchId : null);
-        if (!slots.length) {
-          await logOutbound(service, connection, waId, 'conversation', 'Is date par koi time available nahi hai. Dusri date bhejein (YYYY-MM-DD).');
-        } else {
-          const choices = slots.slice(0, 12).map((slot, index) => {
-            const stylist = catalogue.stylists.find((person) => person.id === slot.stylistId);
-            return {
-              time: String(slot.time),
-              stylistId: String(slot.stylistId),
-              stylistName: cleanText(stylist?.name, 100) || 'Available specialist',
-              branchId: String(slot.branchId || flow.branchId || ''),
-              branchName: cleanText(slot.branchName || flow.branchName || '', 120),
-            };
-          });
-          flow = { ...flow, stage: 'choose_time', date: text, availableSlots: choices };
-          await saveConversation(service, connection.owner_id, waId, {
-            customer_name: contactName || current?.customer_name || null,
-            conversation_status: 'active',
-            flow_state: flow,
-            last_inbound_at: new Date().toISOString(),
-            last_message_id: messageId,
-          });
-          const options = choices.map((slot, index) => `${index + 1}. ${slot.time} — ${slot.stylistName}`).join('\n');
-          await logOutbound(service, connection, waId, 'conversation', `Available times on ${text}:\n${options}\n\nTime ka number reply karein.`);
-        }
-      }
-    } else if (stage === 'choose_time') {
-      const slots = Array.isArray(flow.availableSlots) ? flow.availableSlots as Row[] : [];
-      const position = parseChoice(text, slots.length);
-      if (position < 0) {
-        const options = slots.map((slot, index) => `${index + 1}. ${slot.time} — ${slot.stylistName}`).join('\n');
-        await logOutbound(service, connection, waId, 'conversation', `Time number sahi nahi hai.\n${options}`);
-      } else {
-        const selected = slots[position];
-        flow = {
-          ...flow,
-          stage: 'enter_name',
-          time: String(selected.time),
-          stylistId: String(selected.stylistId),
-          stylistName: String(selected.stylistName),
-          branchId: selected.branchId || flow.branchId || null,
-          branchName: selected.branchName || flow.branchName || null,
-        };
-        await saveConversation(service, connection.owner_id, waId, {
-          customer_name: contactName || current?.customer_name || null,
-          conversation_status: 'active',
-          flow_state: flow,
-          last_inbound_at: new Date().toISOString(),
-          last_message_id: messageId,
-        });
-        await logOutbound(service, connection, waId, 'conversation', 'Booking ke liye apna naam bhejein.');
-      }
-    } else if (stage === 'enter_name') {
-      const customerName = cleanText(text, 100);
-      if (customerName.length < 2) {
-        await logOutbound(service, connection, waId, 'conversation', 'Apna poora naam bhejein (kam se kam 2 letters).');
-      } else {
-        const selectedService = catalogue.services.find((item) => item.id === flow.serviceId);
-        if (!selectedService) throw new Error('Selected service is no longer available.');
-        const deposit = Math.ceil(selectedService.price * 25);
-        flow = { ...flow, stage: 'await_confirmation', customerName };
-        await saveConversation(service, connection.owner_id, waId, {
-          customer_name: customerName,
-          conversation_status: 'awaiting_confirmation',
-          flow_state: flow,
-          last_inbound_at: new Date().toISOString(),
-          last_message_id: messageId,
-        });
-        await logOutbound(service, connection, waId, 'conversation',
-          `Booking details check karein:\nService: ${selectedService.name}\nBranch: ${flow.branchName || 'Main salon'}\nDate: ${flow.date}\nTime: ${flow.time}\nSpecialist: ${flow.stylistName}\nTotal: ₹${selectedService.price}\nAdvance (25%): ₹${(deposit / 100).toFixed(2)}\n\nConfirm karne ke liye YES bhejein. Badalne ke liye MENU bhejein.`);
-      }
-    } else if (stage === 'await_confirmation') {
-      if (lower !== 'yes' && lower !== 'confirm') {
-        await logOutbound(service, connection, waId, 'conversation', 'Booking confirm karne ke liye YES bhejein. Dobara options dekhne ke liye MENU bhejein.');
-      } else {
-        const razorpayKey = env('RAZORPAY_KEY_ID');
-        const razorpaySecret = env('RAZORPAY_KEY_SECRET');
-        if (!razorpayKey || !razorpaySecret) {
-          await logOutbound(service, connection, waId, 'conversation', 'Is salon ka online advance payment abhi setup nahi hua hai. Booking save nahi hui. Kripya salon se seedha sampark karein.');
-        } else {
-          const requestFingerprint = await hmacHex(env('META_APP_SECRET'), `${connection.owner_id}:${waId}:${messageId}`);
-          const phone = normalizePhone(waId);
-          const { data: booking, error: bookingError } = await service.rpc('studioflow_whatsapp_book_guest', {
-            p_owner_id: connection.owner_id,
-            p_service_id: String(flow.serviceId),
-            p_branch_id: flow.branchId || null,
-            p_date: String(flow.date),
-            p_time: String(flow.time),
-            p_stylist_id: String(flow.stylistId),
-            p_customer_name: String(flow.customerName),
-            p_customer_phone: phone,
-            p_customer_wa_id: waId,
-            p_idempotency_key: requestFingerprint,
-          });
-          if (bookingError || !booking?.id) {
-            flow = { stage: 'choose_date', serviceId: flow.serviceId, serviceName: flow.serviceName, branchId: flow.branchId, branchName: flow.branchName };
-            await saveConversation(service, connection.owner_id, waId, {
-              customer_name: String(flow.customerName || current?.customer_name || ''),
-              conversation_status: 'active',
-              flow_state: flow,
-              last_inbound_at: new Date().toISOString(),
-              last_message_id: messageId,
-            });
-            await logOutbound(service, connection, waId, 'conversation', 'Ye time abhi available nahi hai ya booking save nahi hui. Kripya nayi date bhejein, main fresh times check karunga.');
-          } else {
-            const amountPaise = Math.ceil(Number(booking.servicePrice) * 25);
-            const expireBy = Math.floor(new Date(String(booking.holdExpiresAt)).getTime() / 1000);
-            const paymentResponse = await fetch('https://api.razorpay.com/v1/payment_links', {
-              method: 'POST',
-              headers: {
-                Authorization: 'Basic ' + btoa(`${razorpayKey}:${razorpaySecret}`),
-                'Content-Type': 'application/json',
-              },
-              body: JSON.stringify({
-                amount: amountPaise,
-                currency: 'INR',
-                accept_partial: false,
-                expire_by: expireBy,
-                reference_id: String(booking.id),
-                description: `25% advance for ${cleanText(booking.serviceName, 100)}`,
-                customer: { name: String(flow.customerName), contact: phone },
-                notify: { sms: false, email: false },
-                reminder_enable: false,
-                notes: {
-                  studioflow_booking: String(booking.id),
-                  owner_id: connection.owner_id,
-                  source: 'whatsapp',
-                },
-              }),
-              signal: AbortSignal.timeout(20000),
-            });
-            const link = await paymentResponse.json().catch(() => ({})) as Row;
-            if (!paymentResponse.ok || typeof link.id !== 'string' || typeof link.short_url !== 'string') {
-              await service.from('studioflow_bookings').update({ status: 'cancelled', hold_expires_at: null }).eq('id', booking.id).eq('owner_id', connection.owner_id);
-              throw new Error('Razorpay could not create the salon advance payment link.');
-            }
-            let orderId = typeof link.order_id === 'string' ? link.order_id : '';
-            if (!orderId) {
-              const fetchLink = await fetch(`https://api.razorpay.com/v1/payment_links/${encodeURIComponent(String(link.id))}`, {
-                headers: { Authorization: 'Basic ' + btoa(`${razorpayKey}:${razorpaySecret}`) },
-                signal: AbortSignal.timeout(15000),
-              });
-              const fetched = await fetchLink.json().catch(() => ({})) as Row;
-              orderId = typeof fetched.order_id === 'string' ? fetched.order_id : '';
-            }
-            if (!orderId) {
-              await fetch(`https://api.razorpay.com/v1/payment_links/${encodeURIComponent(String(link.id))}/cancel`, {
-                method: 'POST',
-                headers: { Authorization: 'Basic ' + btoa(`${razorpayKey}:${razorpaySecret}`) },
-                signal: AbortSignal.timeout(15000),
-              }).catch(() => null);
-              await service.from('studioflow_bookings').update({ status: 'cancelled', hold_expires_at: null }).eq('id', booking.id).eq('owner_id', connection.owner_id);
-              throw new Error('Payment provider did not return a verified booking order reference.');
-            }
-            const { data: registered, error: registerError } = await service.rpc('studioflow_register_payment', {
-              p_booking: booking.id,
-              p_order: orderId,
-              p_amount: amountPaise,
-            });
-            if (registerError || !registered) {
-              await fetch(`https://api.razorpay.com/v1/payment_links/${encodeURIComponent(String(link.id))}/cancel`, {
-                method: 'POST',
-                headers: { Authorization: 'Basic ' + btoa(`${razorpayKey}:${razorpaySecret}`) },
-                signal: AbortSignal.timeout(15000),
-              }).catch(() => null);
-              await service.from('studioflow_bookings').update({ status: 'cancelled', hold_expires_at: null }).eq('id', booking.id).eq('owner_id', connection.owner_id);
-              throw new Error('The payment link could not be safely attached to this booking.');
-            }
-            const { error: updateOrderError } = await service.from('studioflow_payment_orders')
-              .update({
-                payment_link_id: String(link.id),
-                payment_link_url: String(link.short_url),
-                payment_link_status: String(link.status || 'created'),
-              })
-              .eq('booking_id', booking.id);
-            if (updateOrderError) throw new Error('The payment link was created but could not be saved against the booking.');
-
-            await service.from('salon_whatsapp_message_log').insert({
-              owner_id: connection.owner_id,
-              salon_id: null,
-              booking_id: booking.id,
-              studioflow_payment_booking_id: booking.id,
-              direction: 'outbound',
-              recipient_wa_id: waId,
-              message_kind: 'payment_link',
-              delivery_status: 'queued',
-              metadata: {
-                paymentLinkId: link.id,
-                paymentUrl: link.short_url,
-                amountPaise,
-                currency: 'INR',
-              },
-            });
-
-            const paymentText = `Aapki booking request save ho gayi hai.\nBooking: ${String(booking.id).slice(0,8).toUpperCase()}\nAdvance (25%): ₹${(amountPaise / 100).toFixed(2)}\n\nPayment complete karne ke liye is secure link ko open karein:\n${link.short_url}\n\nPayment verify hote hi booking confirm hogi. Link 15 minute tak valid hai.`;
-            await logOutbound(service, connection, waId, 'payment_link', paymentText, {
-              bookingId: String(booking.id),
-              paymentBookingId: String(booking.id),
-              metadata: { paymentLinkId: link.id, amountPaise },
-            });
-            await saveConversation(service, connection.owner_id, waId, {
-              customer_name: String(flow.customerName),
-              conversation_status: 'awaiting_confirmation',
-              flow_state: { ...flow, stage: 'awaiting_payment', bookingId: String(booking.id), paymentLinkId: String(link.id) },
-              last_inbound_at: new Date().toISOString(),
-              last_message_id: messageId,
-            });
-          }
-        }
-      }
-    } else if (stage === 'awaiting_payment') {
-      await logOutbound(service, connection, waId, 'conversation', 'Aapki booking ko confirm karne ke liye upar diya gaya advance payment link complete karein. Payment verify hote hi confirmation bhej di jayegi.');
-    } else {
-      await logOutbound(service, connection, waId, 'conversation', menuText(catalogue.businessName, catalogue.services));
-      await saveConversation(service, connection.owner_id, waId, {
-        conversation_status: 'active',
-        flow_state: { stage: 'choose_service' },
-        last_inbound_at: new Date().toISOString(),
-        last_message_id: messageId,
-      });
-    }
-
-    await service.from('salon_whatsapp_message_log').insert({
-      owner_id: connection.owner_id,
-      salon_id: null,
-      direction: 'inbound',
-      recipient_wa_id: waId,
-      message_kind: 'conversation',
-      delivery_status: 'received',
-      metadata: { text, messageId, contactName: cleanText(contactName, 100) },
-    });
-
-    await service.from('salon_whatsapp_webhook_events')
-      .update({ processing_status: 'processed', processed_at: new Date().toISOString() })
-      .eq('provider_event_id', messageId);
+    customerId = await ensureWhatsAppCustomer(db, sender, safeText(flow.clientName, 150));
   } catch (error) {
-    await service.from('salon_whatsapp_webhook_events')
-      .update({
-        processing_status: 'failed',
-        error_code: error instanceof Error ? error.message.slice(0, 180) : 'MESSAGE_PROCESSING_FAILED',
-      })
-      .eq('provider_event_id', messageId);
-    // Meta may retry failed webhook deliveries; the failed event can be retried
-    // safely because booking creation is guarded by the external idempotency key.
-    throw error;
+    await saveConversation(db, conversation, { step: 'menu' });
+    await sendSalonText(
+      db, connection, conversation.owner_id, sender,
+      'I could not set up your customer record securely: ' +
+      (error instanceof Error ? error.message : 'Please contact the salon team.') +
+      '\n\nReply 3 and the salon team can help you.',
+      'conversation',
+    );
+    return;
   }
-}
 
-async function handlePaymentSuccess(service: any, bookingId: string, paymentId: string, amountPaise: number) {
-  const { data: booking, error } = await service
-    .from('studioflow_bookings')
-    .select('id,owner_id,booking_source,status,payload')
-    .eq('id', bookingId)
-    .maybeSingle();
-  if (error || !booking || booking.booking_source !== 'whatsapp' || booking.status !== 'confirmed') {
-    throw new Error('Verified WhatsApp booking was not found for payment confirmation.');
+  const requestKey = typeof flow.requestKey === 'string' ? flow.requestKey : crypto.randomUUID();
+  const result = await db.rpc('nexora_whatsapp_book_guest', {
+    p_owner: conversation.owner_id,
+    p_slug: website.slug,
+    p_services: [String(flow.serviceId)],
+    p_date: flow.date,
+    p_time: flow.time,
+    p_stylist: flow.stylistId,
+    p_name: safeText(flow.clientName, 150),
+    p_phone: '+' + sender,
+    p_instructions: '',
+    p_request: requestKey,
+    p_customer_id: customerId,
+    p_branch: flow.branchId || null,
+  });
+  const booking = result.data;
+  if (result.error || !booking?.id) {
+    const reason = safeText(result.error?.message, 250) || 'The appointment could not be reserved.';
+    await saveConversation(db, conversation, { step: 'menu' });
+    await sendSalonText(
+      db, connection, conversation.owner_id, sender,
+      'I could not reserve that time: ' + reason + '\n\nReply 1 to see services, or 3 to talk to the salon team.',
+      'conversation',
+    );
+    return;
   }
-  const { data: connection } = await service
-    .from('salon_whatsapp_connections')
-    .select('owner_id,phone_number_id,waba_id,access_token_ciphertext,access_token_iv,token_key_version,connection_status')
-    .eq('owner_id', booking.owner_id)
-    .eq('connection_status', 'connected')
-    .maybeSingle();
-  if (!connection) throw new Error('Salon WhatsApp number is not connected.');
-  const payload = booking.payload as Row;
-  const waId = cleanText(payload.customerWhatsAppId, 20);
-  if (!/^\d{8,15}$/.test(waId)) throw new Error('Booking does not contain a valid customer WhatsApp ID.');
 
-  const { data: prior } = await service
-    .from('salon_whatsapp_message_log')
-    .select('id')
-    .eq('owner_id', booking.owner_id)
-    .eq('booking_id', booking.id)
-    .eq('message_kind', 'payment_success')
-    .in('delivery_status', ['sent','delivered','read'])
-    .limit(1)
-    .maybeSingle();
-  if (prior) return { sent: true, alreadySent: true };
-
-  const { data: conversation } = await service
-    .from('salon_whatsapp_conversations')
-    .select('last_inbound_at')
-    .eq('owner_id', booking.owner_id)
-    .eq('customer_wa_id', waId)
-    .maybeSingle();
-  const recentWindowOpen = Boolean(conversation?.last_inbound_at)
-    && Date.now() - new Date(String(conversation.last_inbound_at)).getTime() < 24 * 60 * 60 * 1000;
-  const bookingRef = String(booking.id).slice(0, 8).toUpperCase();
-  const amount = (amountPaise / 100).toFixed(2);
-  const connectionRow = connection as Connection;
-  const paymentText = `Payment receive ho gaya! ✅\nBooking ${bookingRef} ab confirm hai.\nService: ${cleanText(payload.serviceName, 100)}\nDate: ${cleanText(payload.date, 20)}\nTime: ${cleanText(payload.time, 20)}\nAdvance paid: ₹${amount}\n\nDhanyavaad!`;
-
-  if (recentWindowOpen) {
-    await logOutbound(service, connectionRow, waId, 'payment_success', paymentText, {
-      bookingId: booking.id,
-      paymentBookingId: booking.id,
-      metadata: { paymentId, amountPaise, verified: true },
-    });
+  await saveConversation(db, conversation, { step: 'payment_pending', bookingId: booking.id }, 'awaiting_confirmation');
+  const payment = await createWhatsAppPaymentLink(booking.id);
+  if (payment.ok) {
+    const total = Number(booking.servicePrice || 0);
+    const advance = Number(payment.amountPaise || 0) / 100;
+    await sendSalonText(
+      db, connection, conversation.owner_id, sender,
+      'Your appointment request is on hold for 15 minutes.\n\nService: ' + safeText(booking.serviceName, 120) +
+      '\nDate: ' + flow.date + '\nTime: ' + flow.time +
+      (flow.branchName ? '\nLocation: ' + safeText(flow.branchName, 100) : '') +
+      '\nSpecialist: ' + (safeText(flow.stylistName, 100) || 'Available specialist') +
+      '\nTotal: ₹' + total.toLocaleString('en-IN') +
+      '\nAdvance to confirm: ₹' + advance.toLocaleString('en-IN') +
+      '\n\nPay securely here: ' + payment.paymentLinkUrl +
+      '\n\nYour appointment becomes confirmed only after Razorpay verifies the payment. Reply NO to cancel this request.',
+      'payment_link', booking.id,
+    );
   } else {
-    const templateName = env('META_WHATSAPP_PAYMENT_SUCCESS_TEMPLATE');
-    if (!templateName) {
-      await service.from('salon_whatsapp_message_log').insert({
-        owner_id: booking.owner_id,
-        salon_id: null,
-        booking_id: booking.id,
-        studioflow_payment_booking_id: booking.id,
-        direction: 'outbound',
-        recipient_wa_id: waId,
-        message_kind: 'payment_success',
-        delivery_status: 'failed',
-        error_code: 'APPROVED_PAYMENT_TEMPLATE_NOT_CONFIGURED',
-        metadata: { paymentId, amountPaise, verified: true },
+    await sendSalonText(
+      db, connection, conversation.owner_id, sender,
+      'Your appointment request was created, but the secure advance payment link could not be created. The time is held for 15 minutes only and is not confirmed yet. Please contact the salon or try again shortly. Request: ' + booking.id,
+      'conversation', booking.id,
+    );
+  }
+}
+async function handleInbound(db: any, connection: Json, message: Json, contact: Json | null) {
+  const sender = digits(message.from);
+  const messageId = safeText(message.id, 200);
+  if (!sender || !messageId) return;
+  const providerEventId = 'message:' + messageId;
+  const event = await db.from('salon_whatsapp_webhook_events').insert({
+    provider_event_id: providerEventId,
+    phone_number_id: connection.phone_number_id,
+    owner_id: connection.owner_id,
+    salon_id: null,
+    event_type: 'message',
+    payload: message,
+    processing_status: 'processing',
+  }).select('id').maybeSingle();
+  let eventRow = event.data;
+  if (event.error?.code === '23505') {
+    const previous = await db.from('salon_whatsapp_webhook_events')
+      .select('id,processing_status')
+      .eq('provider_event_id', providerEventId)
+      .eq('owner_id', connection.owner_id)
+      .maybeSingle();
+    if (previous.error || !previous.data) throw new Error('Could not load the existing WhatsApp event.');
+    if (previous.data.processing_status === 'processed' || previous.data.processing_status === 'ignored') return;
+    eventRow = previous.data;
+    await db.from('salon_whatsapp_webhook_events')
+      .update({ processing_status: 'processing', error_code: null })
+      .eq('id', eventRow.id);
+  } else if (event.error || !eventRow) {
+    throw new Error('Could not save inbound WhatsApp event.');
+  }
+
+  const receivedAt = message.timestamp
+    ? new Date(Number(message.timestamp) * 1000).toISOString()
+    : new Date().toISOString();
+  const contactName = safeText(contact?.profile?.name, 100);
+  const previous = await db.from('salon_whatsapp_conversations').select('*')
+    .eq('owner_id', connection.owner_id).eq('customer_wa_id', sender).maybeSingle();
+  const conversation: Json = previous.data || {
+    owner_id: connection.owner_id, customer_wa_id: sender, customer_name: null,
+    flow_state: {}, last_inbound_at: null, last_outbound_at: null,
+  };
+  conversation.customer_name = conversation.customer_name || contactName || null;
+  conversation.last_inbound_at = receivedAt;
+  // Persist the inbound timestamp before sending the first reply. A fresh
+  // inbound message reopens the 24-hour customer service window even when
+  // the previous conversation had been inactive for more than a day.
+  await saveConversation(
+    db,
+    conversation,
+    conversation.flow_state && typeof conversation.flow_state === 'object' ? conversation.flow_state : {},
+    String(conversation.conversation_status || 'active'),
+  );
+  const text = extractText(message);
+  await logMessage(db, {
+    owner_id: connection.owner_id,
+    provider_message_id: messageId,
+    direction: 'inbound',
+    recipient_wa_id: sender,
+    message_kind: 'conversation',
+    delivery_status: 'received',
+    metadata: { type: message.type || 'unknown', text: text || null, timestamp: message.timestamp || null },
+  });
+
+  const website = await getWebsite(db, connection.owner_id);
+  const salonName = safeText(website?.content?.profile?.businessName, 120) || 'the salon';
+  let flow = conversation.flow_state && typeof conversation.flow_state === 'object' ? { ...conversation.flow_state } : {};
+  const upper = text.trim().toUpperCase();
+
+  if (['STOP', 'UNSUBSCRIBE', 'END', 'QUIT'].includes(upper)) {
+    flow = { step: 'opted_out', optOut: true };
+    await saveConversation(db, conversation, flow, 'closed');
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'You are opted out of ' + salonName + ' WhatsApp messages. We will not send further messages here.',
+      'conversation');
+    await db.from('salon_whatsapp_webhook_events').update({
+      processing_status: 'processed', processed_at: new Date().toISOString(),
+    }).eq('id', eventRow.id);
+    return;
+  }
+  if (flow.optOut && upper !== 'START') {
+    await saveConversation(db, conversation, flow, 'closed');
+    await db.from('salon_whatsapp_webhook_events').update({
+      processing_status: 'processed', processed_at: new Date().toISOString(),
+    }).eq('id', eventRow.id);
+    return;
+  }
+  if (!website) {
+    await saveConversation(db, conversation, { step: 'handoff' }, 'handed_off');
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'The salon website is not published yet. Please contact the salon team directly.', 'conversation');
+    return;
+  }
+  const services = getServices(website.content || {});
+  const showMenu = async () => {
+    await saveConversation(db, conversation, { step: 'menu', optOut: false });
+    await sendSalonText(db, connection, connection.owner_id, sender, menuText(salonName, services), 'conversation');
+  };
+
+  if (!text) {
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Please send a text reply. Type MENU to see services or 3 to speak to the salon team.', 'conversation');
+    return;
+  }
+  if (upper === 'START') flow = { step: 'menu', optOut: false };
+  if (upper === '3') {
+    await saveConversation(db, conversation, { step: 'handoff' }, 'handed_off');
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'I have passed your message to ' + salonName + '. The salon team will reply here.', 'human_handoff');
+    return;
+  }
+  if (upper === 'NO' || upper === 'CANCEL') {
+    if (flow.step === 'payment_pending' && typeof flow.bookingId === 'string') {
+      const cancelled = await db.rpc('nexora_whatsapp_cancel_pending', {
+        p_owner: connection.owner_id,
+        p_booking: flow.bookingId,
+        p_phone: '+' + sender,
       });
-      return { sent: false, reason: 'Approved WhatsApp payment-success template is not configured.' };
+      if (cancelled.error || cancelled.data?.cancelled !== true) {
+        await sendSalonText(db, connection, connection.owner_id, sender,
+          'I could not cancel this booking request: ' +
+          (safeText(cancelled.error?.message, 220) || 'Please contact the salon team.'),
+          'conversation', flow.bookingId);
+        return;
+      }
+      const link = await cancelWhatsAppPaymentLink(flow.bookingId);
+      await saveConversation(db, conversation, { step: 'menu' }, 'active');
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        link.ok
+          ? 'Your unpaid appointment request has been cancelled and the time has been released. Reply MENU to start again.'
+          : 'Your appointment request has been cancelled and the time has been released. The payment link cancellation is still being checked; please do not make another payment. Reply 3 if you need help.',
+        'conversation', flow.bookingId);
+      return;
     }
-    await logTemplate(service, connectionRow, waId, templateName, [
-      cleanText(payload.clientName || payload.customerName, 100),
-      bookingRef,
-      amount,
-      cleanText(payload.date, 20),
-      cleanText(payload.time, 20),
-    ], booking.id);
+    await saveConversation(db, conversation, { step: 'menu' });
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Okay, I have not confirmed this appointment. Reply MENU to start again.', 'conversation');
+    return;
   }
-
-  await service.from('salon_whatsapp_conversations')
-    .update({ conversation_status: 'booked', flow_state: { stage: 'booked', bookingId: booking.id }, updated_at: new Date().toISOString() })
-    .eq('owner_id', booking.owner_id)
-    .eq('customer_wa_id', waId);
-
-  return { sent: true };
+  if (['HI', 'HELLO', 'HEY', 'MENU', 'START'].includes(upper)) {
+    await showMenu();
+    return;
+  }
+  if (flow.step === 'menu' && upper === '1') {
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Services and prices:\n' + formatServices(services) + '\n\nReply 2 to book or 3 to talk to the salon team.', 'conversation');
+    return;
+  }
+  if ((flow.step === 'menu' || !flow.step) && upper === '2') {
+    await saveConversation(db, conversation, { step: 'choose_service' });
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Which service would you like to book?\n\n' + formatServices(services) + '\n\nReply with the service number.', 'conversation');
+    return;
+  }
+  if (flow.step === 'choose_service') {
+    const index = Number.parseInt(text, 10) - 1;
+    const service = Number.isInteger(index) ? services[index] : null;
+    if (!service) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'Please reply with a service number from 1 to ' + services.length + '.', 'conversation');
+      return;
+    }
+    const branchResult = await db.from('branches')
+      .select('id,name,city')
+      .eq('site_id', connection.owner_id)
+      .eq('is_active', true)
+      .order('created_at', { ascending: true });
+    if (branchResult.error || !Array.isArray(branchResult.data)) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'I could not load the salon locations right now. Please try again or reply 3 for help.', 'conversation');
+      return;
+    }
+    const locations = branchResult.data as Json[];
+    const chosen = {
+      serviceId: String(service.id),
+      serviceName: safeText(service.name, 120),
+      servicePrice: Number(service.price),
+    };
+    if (locations.length > 1) {
+      flow = {
+        ...chosen,
+        step: 'choose_branch',
+        branches: locations.slice(0, 20).map((item: Json) => ({
+          id: String(item.id),
+          name: safeText(item.name, 100),
+          city: safeText(item.city, 80),
+        })),
+      };
+      await saveConversation(db, conversation, flow);
+      const options = flow.branches.map((item: Json, position: number) =>
+        String(position + 1) + '. ' + item.name + (item.city ? ' – ' + item.city : '')
+      ).join('\n');
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'You chose ' + safeText(service.name, 100) + ' (₹' + Number(service.price).toLocaleString('en-IN') +
+        ').\n\nWhich salon location would you like to visit?\n' + options + '\n\nReply with the location number.',
+        'conversation');
+      return;
+    }
+    flow = {
+      ...chosen,
+      step: 'choose_date',
+      branchId: locations[0]?.id || null,
+      branchName: safeText(locations[0]?.name, 100),
+    };
+    await saveConversation(db, conversation, flow);
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'You chose ' + safeText(service.name, 100) + ' (₹' + Number(service.price).toLocaleString('en-IN') +
+      ').\n\nSend the appointment date as YYYY-MM-DD.', 'conversation');
+    return;
+  }
+  if (flow.step === 'choose_branch') {
+    const options = Array.isArray(flow.branches) ? flow.branches as Json[] : [];
+    const index = Number.parseInt(text, 10) - 1;
+    const selected = Number.isInteger(index) ? options[index] : null;
+    if (!selected) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'Please reply with one of the salon location numbers shown above.', 'conversation');
+      return;
+    }
+    flow = {
+      ...flow,
+      step: 'choose_date',
+      branchId: selected.id,
+      branchName: selected.name,
+      branches: undefined,
+    };
+    await saveConversation(db, conversation, flow);
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Location selected: ' + safeText(selected.name, 100) + '.\n\nSend the appointment date as YYYY-MM-DD.',
+      'conversation');
+    return;
+  }
+  if (flow.step === 'choose_date') {
+    const date = text.trim();
+    if (!validDate(date) || new Date(date + 'T23:59:59+05:30').getTime() <= Date.now()) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'Please enter a future date in YYYY-MM-DD format.', 'conversation');
+      return;
+    }
+    const slotsResult = flow.branchId
+      ? await db.rpc('studioflow_branch_android_slots', {
+          p_slug: website.slug,
+          p_services: [String(flow.serviceId)],
+          p_date: date,
+          p_stylist: 'any',
+          p_branch: flow.branchId,
+        })
+      : await db.rpc('studioflow_android_slots', {
+          p_slug: website.slug,
+          p_services: [String(flow.serviceId)],
+          p_date: date,
+          p_stylist: 'any',
+        });
+    const available = Array.isArray(slotsResult.data)
+      ? slotsResult.data.filter((slot: Json) => slot && slot.available === true && validTime(String(slot.time || '')))
+      : [];
+    if (slotsResult.error || available.length === 0) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'There are no available times for that date. Please send another date as YYYY-MM-DD.', 'conversation');
+      return;
+    }
+    flow = {
+      ...flow,
+      step: 'choose_time',
+      date,
+      slots: available.slice(0, 12).map((slot: Json) => ({
+        time: slot.time, stylistId: slot.stylistId, stylistName: slot.stylistName,
+      })),
+    };
+    await saveConversation(db, conversation, flow);
+    const options = flow.slots.map((slot: Json, index: number) =>
+      String(index + 1) + '. ' + slot.time + (slot.stylistName ? ' – ' + safeText(slot.stylistName, 70) : '')
+    ).join('\n');
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Available times on ' + date + (flow.branchName ? ' at ' + flow.branchName : '') +
+      ':\n' + options + '\n\nReply with a number or exact time (HH:MM).', 'conversation');
+    return;
+  }
+  if (flow.step === 'choose_time') {
+    const slots = Array.isArray(flow.slots) ? flow.slots as Json[] : [];
+    const index = Number.parseInt(text, 10) - 1;
+    const selected = Number.isInteger(index) && slots[index] ? slots[index] : slots.find((slot) => slot.time === text.trim());
+    if (!selected) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'Choose one of the listed times, for example 10:30 or reply with its number.', 'conversation');
+      return;
+    }
+    flow = {
+      ...flow, step: 'choose_name',
+      time: selected.time,
+      stylistId: selected.stylistId,
+      stylistName: selected.stylistName,
+    };
+    await saveConversation(db, conversation, flow);
+    await sendSalonText(db, connection, connection.owner_id, sender, 'Please send the name for this booking.', 'conversation');
+    return;
+  }
+  if (flow.step === 'choose_name') {
+    const name = safeText(text, 150);
+    if (name.length < 2) {
+      await sendSalonText(db, connection, connection.owner_id, sender,
+        'Please send your name (at least 2 characters).', 'conversation');
+      return;
+    }
+    flow = { ...flow, step: 'confirm_booking', clientName: name, requestKey: crypto.randomUUID() };
+    await saveConversation(db, conversation, flow, 'awaiting_confirmation');
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Please check your appointment details:\n\n' + safeText(flow.serviceName, 120) +
+      '\n' + flow.date + ' at ' + flow.time +
+      (flow.branchName ? '\nLocation: ' + safeText(flow.branchName, 100) : '') +
+      '\nSpecialist: ' + (safeText(flow.stylistName, 100) || 'Available specialist') +
+      '\nCustomer: ' + name +
+      '\nService price: ₹' + Number(flow.servicePrice).toLocaleString('en-IN') +
+      '\n\nBy replying YES, you approve this booking and allow this salon to save your name and WhatsApp number as a customer record. Reply YES to confirm, or NO to cancel.', 'conversation');
+    return;
+  }
+  if ((flow.step === 'confirm_booking' || flow.step === 'needs_customer_verification') && upper === 'YES') {
+    await processBooking(db, connection, conversation, flow, website, sender);
+    return;
+  }
+  if (flow.step === 'payment_pending') {
+    if (upper === 'PAY' || upper === 'PAYMENT') {
+      const payment = flow.bookingId ? await createWhatsAppPaymentLink(flow.bookingId) : { ok: false };
+      if (payment.ok) {
+        await sendSalonText(db, connection, connection.owner_id, sender,
+          'Complete your secure advance payment here: ' + payment.paymentLinkUrl,
+          'payment_link', flow.bookingId);
+      } else {
+        await sendSalonText(db, connection, connection.owner_id, sender,
+          'The payment link is not available right now. Please contact the salon team before the hold expires.',
+          'conversation', flow.bookingId || null);
+      }
+      return;
+    }
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Your booking request is waiting for the advance payment. Reply PAY to resend the link, or NO to cancel.',
+      'conversation', flow.bookingId || null);
+    return;
+  }
+  if (flow.step === 'handoff') {
+    await sendSalonText(db, connection, connection.owner_id, sender,
+      'Your message is with ' + salonName + '. Reply MENU to return to booking options.', 'human_handoff');
+    return;
+  }
+  await showMenu();
+  await db.from('salon_whatsapp_webhook_events').update({
+    processing_status: 'processed', processed_at: new Date().toISOString(),
+  }).eq('id', eventRow.id);
 }
-
-async function handleDeliveryStatuses(service: any, statuses: Row[]) {
+async function updateStatuses(db: any, connection: Json, statuses: Json[]) {
   for (const status of statuses) {
-    const messageId = cleanText(status.id, 200);
-    const deliveryStatus = cleanText(status.status, 20);
-    if (!messageId || !['sent','delivered','read','failed'].includes(deliveryStatus)) continue;
-    const errors = Array.isArray(status.errors) ? status.errors as Row[] : [];
-    await service.from('salon_whatsapp_message_log')
-      .update({
-        delivery_status: deliveryStatus,
-        error_code: errors[0] ? String(errors[0].code || 'WHATSAPP_DELIVERY_FAILED').slice(0, 80) : null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('provider_message_id', messageId);
+    const messageId = safeText(status.id, 200);
+    const delivery = safeText(status.status, 20);
+    if (!messageId || !['sent', 'delivered', 'read', 'failed'].includes(delivery)) continue;
+    const timestamp = safeText(status.timestamp, 40);
+    const eventId = 'status:' + messageId + ':' + delivery + ':' + timestamp;
+    const inserted = await db.from('salon_whatsapp_webhook_events').insert({
+      provider_event_id: eventId,
+      phone_number_id: connection.phone_number_id,
+      owner_id: connection.owner_id,
+      event_type: 'message_status',
+      payload: status,
+      processing_status: 'processed',
+      processed_at: new Date().toISOString(),
+    });
+    if (inserted.error?.code === '23505') continue;
+    if (inserted.error) throw new Error('Could not record WhatsApp delivery status.');
+    await db.from('salon_whatsapp_message_log').update({
+      delivery_status: delivery,
+      error_code: delivery === 'failed' ? safeText(status.errors?.[0]?.code, 50) : null,
+      updated_at: new Date().toISOString(),
+    }).eq('provider_message_id', messageId).eq('owner_id', connection.owner_id);
   }
 }
-
-Deno.serve(async (request: Request) => {
-  if (request.method === 'GET') {
-    const url = new URL(request.url);
-    const mode = url.searchParams.get('hub.mode') || '';
-    const token = url.searchParams.get('hub.verify_token') || '';
-    const challenge = url.searchParams.get('hub.challenge') || '';
-    if (mode === 'subscribe' && env('META_WEBHOOK_VERIFY_TOKEN') && safeEqual(token, env('META_WEBHOOK_VERIFY_TOKEN'))) {
-      return new Response(challenge, { status: 200, headers: { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' } });
-    }
-    return response('Forbidden', 403, { 'Content-Type': 'text/plain' });
+async function notifyPayment(db: any, bookingId: string, paymentId: string) {
+  const bookingResult = await db.from('studioflow_bookings')
+    .select('id,owner_id,payload,booking_source,status')
+    .eq('id', bookingId).eq('booking_source', 'whatsapp').maybeSingle();
+  const booking = bookingResult.data;
+  if (bookingResult.error || !booking) return { sent: false, reason: 'booking_not_found' };
+  const connectionResult = await db.from('salon_whatsapp_connections').select('*')
+    .eq('owner_id', booking.owner_id).eq('connection_status', 'connected')
+    .eq('webhook_subscribed', true).maybeSingle();
+  const connection = connectionResult.data;
+  if (!connection) return { sent: false, reason: 'salon_sender_not_connected' };
+  const recipient = digits(booking.payload?.clientPhone);
+  if (!recipient) return { sent: false, reason: 'customer_phone_missing' };
+  const conversation = await db.from('salon_whatsapp_conversations')
+    .select('flow_state')
+    .eq('owner_id', booking.owner_id)
+    .eq('customer_wa_id', recipient)
+    .maybeSingle();
+  if (conversation.data?.flow_state?.optOut === true) {
+    await logMessage(db, {
+      owner_id: booking.owner_id,
+      booking_id: booking.id,
+      direction: 'outbound',
+      recipient_wa_id: recipient,
+      message_kind: 'payment_success',
+      delivery_status: 'failed',
+      error_code: 'customer_opted_out',
+      metadata: { reason: 'Payment was recorded, but the customer opted out of WhatsApp messages.' },
+    });
+    return { sent: false, reason: 'customer_opted_out' };
   }
+  const amount = Number(booking.payload?.amountPaid || 0);
+  const website = await getWebsite(db, booking.owner_id);
+  const salonName = safeText(website?.content?.profile?.businessName, 100) || 'our salon';
+  const text = 'Payment received successfully. ✅\n\nYour appointment is confirmed:\n' +
+    safeText(booking.payload?.serviceName, 120) + '\n' +
+    safeText(booking.payload?.date, 20) + ' at ' + safeText(booking.payload?.time, 10) +
+    '\nAdvance received: ₹' + amount.toLocaleString('en-IN') +
+    '\nPayment reference: ' + safeText(paymentId, 40) + '\n\nThank you for booking with ' + salonName + '!';
+  await db.from('salon_whatsapp_conversations').update({
+    conversation_status: 'booked',
+    flow_state: { step: 'booked', bookingId: booking.id },
+    updated_at: new Date().toISOString(),
+  }).eq('owner_id', booking.owner_id).eq('customer_wa_id', recipient);
+  return await sendSalonText(db, connection, booking.owner_id, recipient, text, 'payment_success', booking.id);
+}
 
-  if (request.method === 'OPTIONS') return new Response('ok', { headers: cors(request) });
-  if (request.method !== 'POST') return response({ error: 'Method not allowed.' }, 405);
+Deno.serve(async (req: Request) => {
+  const requestUrl = new URL(req.url);
+  if (req.method === 'OPTIONS') return new Response('ok', {
+    headers: {
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'authorization, apikey, content-type, x-hub-signature-256',
+      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    },
+  });
+  const supabaseUrl = env('SUPABASE_URL');
+  const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY');
+  if (!supabaseUrl || !serviceKey) return json({ error: 'WhatsApp webhook is missing server credentials.' }, 503);
+  const db = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
+
+  if (req.method === 'GET') {
+    const mode = requestUrl.searchParams.get('hub.mode') || '';
+    const token = requestUrl.searchParams.get('hub.verify_token') || '';
+    const challenge = requestUrl.searchParams.get('hub.challenge') || '';
+    if (mode !== 'subscribe' || !challenge) return json({ error: 'Invalid webhook verification request.' }, 400);
+    const expected = await vaultSecret(db, 'nexora_whatsapp_webhook_verify_token');
+    if (!constantTimeEqual(token, expected)) return json({ error: 'Webhook verification token did not match.' }, 403);
+    return new Response(challenge, { status: 200, headers: { 'Content-Type': 'text/plain' } });
+  }
+  if (req.method !== 'POST') return json({ error: 'POST required.' }, 405);
 
   try {
-    const supabaseUrl = env('SUPABASE_URL');
-    const serviceKey = env('SUPABASE_SERVICE_ROLE_KEY');
-    if (!supabaseUrl || !serviceKey) return response({ error: 'WhatsApp webhook service is not configured.' }, 503);
-    const service = createClient(supabaseUrl, serviceKey, { auth: { persistSession: false, autoRefreshToken: false } });
-    const raw = await request.text();
-    if (raw.length > 1024 * 1024) return response({ error: 'Webhook payload too large.' }, 413);
-
-    // Payment success events come only from the existing server-side Razorpay
-    // settlement function using the service-role secret. This path is not public.
-    const internalKey = request.headers.get('x-nexora-internal-key') || '';
-    if (internalKey && safeEqual(internalKey, serviceKey)) {
-      let body: Row;
-      try { body = JSON.parse(raw || '{}') as Row; } catch { return response({ error: 'Invalid JSON.' }, 400); }
-      if (body.action === 'payment_success') {
-        const bookingId = typeof body.bookingId === 'string' ? body.bookingId : '';
-        const paymentId = typeof body.paymentId === 'string' ? body.paymentId : '';
-        const amountPaise = Number(body.amountPaise);
-        if (!/^[0-9a-f-]{36}$/i.test(bookingId) || !paymentId || !Number.isInteger(amountPaise) || amountPaise < 100) {
-          return response({ error: 'Invalid internal payment confirmation.' }, 400);
-        }
-        const result = await handlePaymentSuccess(service, bookingId, paymentId, amountPaise);
-        return response({ ok: true, ...result });
+    const raw = await req.text();
+    if (raw.length > 1024 * 1024) return json({ error: 'Webhook payload too large.' }, 413);
+    const bearer = (req.headers.get('authorization') || '').replace(/^Bearer\s+/i, '');
+    if (constantTimeEqual(bearer, serviceKey)) {
+      const body = raw ? JSON.parse(raw) as Json : {};
+      if (body.action === 'ownerReply' && typeof body.ownerId === 'string' &&
+          typeof body.customerWaId === 'string' && typeof body.message === 'string') {
+        const ownerId = body.ownerId;
+        const recipient = digits(body.customerWaId);
+        const message = safeText(body.message, 3500);
+        if (!recipient || !message) return json({ error: 'Valid customer number and message required.' }, 400);
+        const connectionResult = await db.from('salon_whatsapp_connections')
+          .select('*')
+          .eq('owner_id', ownerId)
+          .eq('connection_status', 'connected')
+          .eq('webhook_subscribed', true)
+          .maybeSingle();
+        if (connectionResult.error || !connectionResult.data) return json({ error: 'This salon WhatsApp number is not connected.' }, 409);
+        const conversationResult = await db.from('salon_whatsapp_conversations')
+          .select('flow_state,last_inbound_at')
+          .eq('owner_id', ownerId)
+          .eq('customer_wa_id', recipient)
+          .maybeSingle();
+        if (conversationResult.error || !conversationResult.data) return json({ error: 'WhatsApp conversation not found.' }, 404);
+        if (conversationResult.data.flow_state?.optOut === true) return json({ error: 'This customer opted out. They must reply START before you can message them.' }, 409);
+        const result = await sendSalonText(
+          db,
+          connectionResult.data,
+          ownerId,
+          recipient,
+          message,
+          'human_handoff',
+        );
+        if (!result.sent) return json({ sent: false, reason: result.reason }, 409);
+        const nextFlow = { ...(conversationResult.data.flow_state || {}) };
+        if (nextFlow.step === 'handoff') nextFlow.step = 'menu';
+        await db.from('salon_whatsapp_conversations').update({
+          conversation_status: 'active',
+          flow_state: nextFlow,
+          updated_at: new Date().toISOString(),
+        }).eq('owner_id', ownerId).eq('customer_wa_id', recipient);
+        return json({ sent: true, messageId: result.messageId || null });
       }
-      return response({ error: 'Unknown internal action.' }, 400);
+      if (body.action === 'paymentReceipt' && typeof body.bookingId === 'string' && typeof body.paymentId === 'string') {
+        return json(await notifyPayment(db, body.bookingId, body.paymentId));
+      }
+      return json({ error: 'Unknown internal WhatsApp action.' }, 400);
     }
 
-    const signature = request.headers.get('x-hub-signature-256') || '';
-    if (!await signatureMatches(raw, signature)) return response({ error: 'Invalid Meta webhook signature.' }, 401);
+    const supplied = req.headers.get('x-hub-signature-256') || '';
+    const appSecret = await vaultSecret(db, 'nexora_whatsapp_meta_app_secret');
+    const expected = 'sha256=' + await hmacHex(appSecret, raw);
+    if (!constantTimeEqual(supplied.toLowerCase(), expected.toLowerCase())) {
+      return json({ error: 'Invalid Meta webhook signature.' }, 401);
+    }
+    const payload = raw ? JSON.parse(raw) as Json : {};
+    if (payload.object !== 'whatsapp_business_account' || !Array.isArray(payload.entry)) {
+      return json({ received: true, ignored: true });
+    }
 
-    let payload: Row;
-    try { payload = JSON.parse(raw || '{}') as Row; }
-    catch { return response({ error: 'Invalid Meta webhook JSON.' }, 400); }
-
-    if (payload.object !== 'whatsapp_business_account') return response({ received: true, ignored: true });
-    const entries = Array.isArray(payload.entry) ? payload.entry as Row[] : [];
-    for (const entry of entries) {
-      const changes = Array.isArray(entry.changes) ? entry.changes as Row[] : [];
-      for (const change of changes) {
-        const value = (change.value || {}) as Row;
-        const metadata = (value.metadata || {}) as Row;
-        const phoneNumberId = cleanText(metadata.phone_number_id, 80);
+    let processed = 0;
+    for (const entry of payload.entry as Json[]) {
+      for (const change of (Array.isArray(entry.changes) ? entry.changes : []) as Json[]) {
+        if (change.field !== 'messages') continue;
+        const value = change.value || {};
+        const phoneNumberId = safeText(value.metadata?.phone_number_id, 80);
         if (!phoneNumberId) continue;
-        const connection = await getConnectionByPhone(service, phoneNumberId);
+        const connection = await getConnection(db, phoneNumberId);
         if (!connection) continue;
-
-        const statuses = Array.isArray(value.statuses) ? value.statuses as Row[] : [];
-        if (statuses.length) await handleDeliveryStatuses(service, statuses);
-
-        const contacts = Array.isArray(value.contacts) ? value.contacts as Row[] : [];
-        const messages = Array.isArray(value.messages) ? value.messages as Row[] : [];
+        const contacts = Array.isArray(value.contacts) ? value.contacts as Json[] : [];
+        const messages = Array.isArray(value.messages) ? value.messages as Json[] : [];
+        const statuses = Array.isArray(value.statuses) ? value.statuses as Json[] : [];
+        await updateStatuses(db, connection, statuses);
         for (const message of messages) {
-          const from = cleanText(message.from, 20);
-          const contact = contacts.find((candidate) => String(candidate.wa_id || '') === from);
-          const profile = (contact?.profile || {}) as Row;
-          await processCustomerMessage(service, connection, message, cleanText(profile.name, 100));
+          const sender = digits(message.from);
+          const contact = contacts.find((item) => digits(item.wa_id) === sender) || null;
+          await handleInbound(db, connection, message, contact);
+          await db.from('salon_whatsapp_webhook_events').update({
+            processing_status: 'processed',
+            processed_at: new Date().toISOString(),
+          }).eq('provider_event_id', 'message:' + safeText(message.id, 200))
+            .eq('owner_id', connection.owner_id);
+          processed++;
         }
       }
     }
-
-    return response({ received: true });
+    return json({ received: true, processed });
   } catch (error) {
-    const message = error instanceof Error ? error.message : 'WhatsApp webhook could not be processed.';
-    return response({ error: message }, 500);
+    return json({ error: error instanceof Error ? error.message : 'WhatsApp webhook processing failed.' }, 500);
   }
 });

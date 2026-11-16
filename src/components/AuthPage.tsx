@@ -6,6 +6,7 @@ import {customerToday,validCustomerBirthDate} from '../lib/customerBirthDate';
 import { requestedTemplate } from '../lib/templateEntry';
 import { saveGoogleOAuthIntent, clearGoogleOAuthIntent } from '../lib/googleOAuth';
 import { isBillingInterval, isPricingPlanId, pricingResumePath } from '../lib/nexoraPricing';
+import { authCallbackPath, authModeForPath, isAuthEntryPath } from '../lib/authRoutes';
 import { Eye, EyeOff } from 'lucide-react';
 import { supabase, captureReferral } from '../lib/supabase';
 
@@ -24,13 +25,16 @@ export function AuthPage({ compact = false, recovery = false, onRecovered, custo
   const pricingReturnPath=isPricingPlanId(pricingPlanId)?pricingResumePath({planId:pricingPlanId,billingInterval:isBillingInterval(pricingBilling)?pricingBilling:'annual'}):'';
   const pathname = typeof location === 'undefined' ? '' : (location.pathname || '');
   const safePathname = pathname.startsWith('/') && !pathname.startsWith('//') ? pathname : '/login';
+  // `/sign-in` and `/sign-up` are first-class aliases of the same document;
+  // their path selects the mode when no explicit `?auth=` override is present.
+  const pathAuthMode = authModeForPath(safePathname);
   const safeRedirectPathOverride = redirectPathOverride && redirectPathOverride.startsWith('/') && !redirectPathOverride.startsWith('//') ? redirectPathOverride : '';
   const cleanCustomerReturn = customerReturn && (/^[a-z0-9-]+$/i.test(customerReturn) || (customerReturn.startsWith('/') && !customerReturn.startsWith('//'))) ? customerReturn : '';
   const pendingCustomerRef=customer?captureCustomerReferral():'';
   const customerAppReturn=loginParams.has('app')?cleanCustomerAppReturnPath(search,''):'';
   const baseRedirectPath=loginParams.has('app')?customerAppReturn:safeRedirectPathOverride?safeRedirectPathOverride:customer?`/?customer=1${cleanCustomerReturn?'&return='+encodeURIComponent(cleanCustomerReturn):''}`:selectedTemplate?`/?template=${encodeURIComponent(selectedTemplate.id)}&create=1`:pricingReturnPath||'/';
   const redirectPath=baseRedirectPath+(pendingCustomerRef?(baseRedirectPath.includes('?')?'&':'?')+'customer_ref='+encodeURIComponent(pendingCustomerRef):'');
-  const [mode, setMode] = useState<'signin'|'signup'|'forgot'>((loginParams.get('auth') === 'forgot' ? 'forgot' : loginParams.get('auth')==='signin'?'signin':initialMode) || (loginParams.get('auth')==='signup' || (customer?pendingCustomerRef:captureReferral()) ? 'signup' : 'signin'));
+  const [mode, setMode] = useState<'signin'|'signup'|'forgot'>((loginParams.get('auth') === 'forgot' ? 'forgot' : loginParams.get('auth')==='signin'?'signin':pathAuthMode||initialMode) || (loginParams.get('auth')==='signup' || (customer?pendingCustomerRef:captureReferral()) ? 'signup' : 'signin'));
   const signup = mode === 'signup';
   const [welcomeWhatsApp,setWelcomeWhatsApp]=useState(false);
   const [birthDate,setBirthDate]=useState('');const [whatsapp,setWhatsapp]=useState('');
@@ -48,9 +52,9 @@ export function AuthPage({ compact = false, recovery = false, onRecovered, custo
     const s = q.toString();
     return s ? '?' + s : '';
   })();
-  const preserveOwnerAuthEntry = !customer && !loginParams.has('app') && (safePathname === '/login' || loginParams.has('auth') || loginParams.has('owner') || loginParams.has('panel'));
+  const preserveOwnerAuthEntry = !customer && !loginParams.has('app') && (isAuthEntryPath(safePathname) || loginParams.has('auth') || loginParams.has('owner') || loginParams.has('panel'));
   const oauthFallbackPath = customer && signup ? baseRedirectPath : redirectPath;
-  const authReturnPath = pricingReturnPath || (selectedTemplate ? redirectPath : preserveOwnerAuthEntry ? safePathname + cleanOwnerAuthSearch : oauthFallbackPath);
+  const authReturnPath = pricingReturnPath || (selectedTemplate ? redirectPath : preserveOwnerAuthEntry ? authCallbackPath(safePathname, cleanOwnerAuthSearch) : oauthFallbackPath);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault(); setBusy(true); setMessage('');

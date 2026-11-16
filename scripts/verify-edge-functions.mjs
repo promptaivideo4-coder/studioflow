@@ -89,7 +89,7 @@ assert.deepEqual(offenders, [], `stale backend/functions references:\n  ${offend
 // *using* the service-role key does not count: `snapshot-accounts` did exactly
 // that with no caller check, letting any signed-in user queue a full copy of
 // every account row. Requiring a header read plus a 401/403 keeps that shut.
-const CREDENTIAL_HEADERS = /headers\.get\(\s*['"](authorization|apikey|x-worker-token|x-razorpay-signature|x-hub-signature-256)['"]/i;
+const CREDENTIAL_HEADERS = /headers\.get\(\s*['"](authorization|apikey|x-worker-token|x-razorpay-signature)['"]/i;
 const REJECTS = /\b(401|403)\b/;
 
 // Public by design, with the reason recorded so this stays a deliberate list.

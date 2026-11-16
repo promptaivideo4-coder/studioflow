@@ -20,6 +20,7 @@ for(const template of Object.values(CATEGORY_TEMPLATES)){
  const isAura = template.id === 'unisex_salon';
  const expectedTools = isAura ? 12 : 11;
  const buttons=[...steps,...tools];assert.equal(steps.length,18,template.id);assert.equal(tools.length,expectedTools,template.id);assert.equal(buttons.length,18+expectedTools,template.id);assert.ok(tools.some((b:any)=>b.props.title==='Branches & inventory'),template.id);
+ assert.ok(tools.some((b:any)=>b.props.title==='WhatsApp Booking & Payments'),template.id);
  assert.equal(tools.some((b:any)=>b.props.title==='Template 03 Content Management'),isAura,template.id);
  assert.ok(buttons.every((b:any)=>typeof b.props.onClick==='function'));
  await act(async()=>buttons.find((b:any)=>b.props.title==='3. Logo, colours & hero').props.onClick());
