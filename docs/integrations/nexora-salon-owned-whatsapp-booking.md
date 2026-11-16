@@ -63,7 +63,7 @@ The code and database migrations do not create a Meta developer app or grant Met
 2. Create a Meta App and Embedded Signup v5 Login for Business configuration for WhatsApp Cloud API; request the required WhatsApp Business Management and Messaging permissions and complete App Review/Advanced Access as Meta requires.
 3. Add `META_APP_ID` and `META_WHATSAPP_EMBEDDED_SIGNUP_CONFIG_ID` to Supabase Edge Function Secrets.
 4. Store `nexora_whatsapp_meta_app_secret` and `nexora_whatsapp_webhook_verify_token` in Supabase Vault. The runtime migration provisions `nexora_whatsapp_token_encryption_key` only if it does not already exist.
-5. Deploy the `nexora-whatsapp-connect` and `nexora-whatsapp-webhook` Edge Functions with JWT verification disabled at the gateway (their internal owner/service-role checks handle authorization).
+5. Deploy `nexora-whatsapp-connect` with gateway JWT verification enabled. Deploy `nexora-whatsapp-webhook` and `studioflow-payments` with gateway JWT verification disabled as recorded in `supabase/config.toml`; provider raw-body signatures and internal service-role checks remain mandatory.
 6. Configure the Meta Webhooks callback URL as the deployed `nexora-whatsapp-webhook` endpoint, use the exact Vault verify token, subscribe the WhatsApp Business Account/app to the `messages` webhook field.
 7. Configure the Razorpay webhook URL to the deployed `studioflow-payments` Edge Function with the existing webhook signing secret and subscribe to `payment_link.paid`, `payment_link.expired` and `payment_link.cancelled`.
 8. Run a two-salon tenant-isolation test, one standard Cloud API number and one Business App coexistence number, plus duplicate webhook, opt-out, expired hold, payment capture, post-expiry refund, and owner-inbox reply checks.
@@ -72,6 +72,8 @@ Never paste Meta App Secret, webhook tokens, service-role keys or encryption key
 
 ## Current delivery status
 
-The production Supabase database contains the owner/tenant WhatsApp tables and the support migrations for the encrypted token key, service-role-only booking adapter, customer phone lookup, payment-link ledger columns and unpaid cancellation. The database function permissions for the WhatsApp private functions are restricted to service_role.
+The production Supabase project contains the owner/tenant WhatsApp tables and the support migrations for the Vault encryption key, service-role-only customer lookup and guest booking, payment-link ledger, cancellation/refund protection and runtime contracts. Private WhatsApp RPCs are restricted to service_role.
 
-The owner UI, Meta Embedded Signup v5 client/server flow, signed webhook handler, booking conversation, Razorpay Payment Link actions and owner inbox are in PR #122. The PR has not been merged or deployed as Edge Functions yet. No salon WhatsApp numbers are connected and no real customer messages or WhatsApp-originated bookings have been processed by this code. Meta app approval/configuration and Vault secrets remain external platform setup requirements; do not advertise the feature as live until those gates and end-to-end tests pass.
+The implementation and ZIP corrections are now integrated on the open PR #121 branch. The PR has not been merged and the updated Edge Functions have not been deployed. The owner UI therefore does not mean that Meta messaging is live yet.
+
+After Meta signup, the sender remains **Verification pending**. It becomes connected only after a signed inbound message is received and a reply is accepted by Meta with a message ID. No live salon number, customer message, WhatsApp booking or payment was created by the source tests. Meta approval, Vault configuration, Edge Function deployment and a two-salon end-to-end test remain required before rollout.
