@@ -82,7 +82,7 @@ Deno.serve(async(req:Request)=>{
         .maybeSingle();
       if(error||!booking||booking.booking_source!=='whatsapp'||booking.status!=='confirmed')return;
       try{
-        const notify=await fetch(`${url.replace(/\\/$/,'')}/functions/v1/nexora-whatsapp-webhook`,{
+        const notify=await fetch(`${url.endsWith('/')?url.slice(0,-1):url}/functions/v1/nexora-whatsapp-webhook`,{
           method:'POST',
           headers:{'Content-Type':'application/json','x-nexora-internal-key':serviceKey},
           body:JSON.stringify({action:'payment_success',bookingId,paymentId,amountPaise}),
