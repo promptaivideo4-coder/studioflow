@@ -10,6 +10,7 @@ import { NexoraDemoLeadsAdmin } from './components/nexora-landing/admin/NexoraDe
 import { loadScreen } from './lib/loadScreen';
 import { capturePublicReferral } from './lib/publicReferral';
 import { AUTH_CALLBACK_QUERY_KEYS, hasAuthCallbackFragment } from './lib/authEntry';
+import { isAuthEntryPath } from './lib/authRoutes';
 import { resolveSiteSlug } from './lib/resolveSite';
 
 const FullApplication = lazy(() =>
@@ -31,6 +32,10 @@ const PUBLIC_MARKETING_ROUTES = new Set(['/salon-os', '/pricing', '/privacy', '/
 
 export function requiresFullApplication(location: Pick<Location, 'pathname' | 'search' | 'hash' | 'hostname'>): boolean {
   if (resolveSiteSlug(location)) return true;
+
+  // `/login`, `/sign-in` and `/sign-up` must always boot the auth bundle even
+  // though only `/login` has a prerendered marketing document.
+  if (isAuthEntryPath(location.pathname)) return true;
 
   const query = new URLSearchParams(location.search);
   if (APP_QUERY_KEYS.some((key) => query.has(key))) return true;

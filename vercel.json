@@ -3,9 +3,30 @@
   "git": {
     "deploymentEnabled": false
   },
+  "redirects": [
+    {
+      "source": "/(.*)",
+      "has": [
+        {
+          "type": "host",
+          "value": "www.nexorasalon.online"
+        }
+      ],
+      "destination": "https://nexorasalon.online/$1",
+      "permanent": true
+    }
+  ],
   "rewrites": [
     {
       "source": "/login",
+      "destination": "/login.html"
+    },
+    {
+      "source": "/sign-in",
+      "destination": "/login.html"
+    },
+    {
+      "source": "/sign-up",
       "destination": "/login.html"
     },
     {

@@ -53,7 +53,10 @@ import { useCustomerWelcomeDelivery } from './components/CustomerWelcomeDelivery
 import { CustomerInvitePage } from './components/CustomerInvitePage';
 import { isCustomerInviteEntry, clearCustomerReferral } from './lib/customerReferral';
 import { CustomerReferralBridge } from './components/CustomerReferralBridge';
-import { readGoogleOAuthIntent, clearGoogleOAuthIntent, isNewGoogleAccount } from './lib/googleOAuth';
+import { readGoogleOAuthIntent, clearGoogleOAuthIntent, isNewGoogleAccount, type GoogleOAuthIntent } from './lib/googleOAuth';
+import { cleanGoogleSignupValues, googleSignupWhatsApp, missingGoogleSignupFields, type GoogleSignupValues } from './lib/googleProfileCompletion';
+import { ProfileCompletionGate } from './components/ProfileCompletionGate';
+import { authModeForPath, isAuthEntryPath } from './lib/authRoutes';
 import { CustomerApp } from './components/CustomerApp';
 import { supabase, captureReferral } from './lib/supabase';
 import { applySeoMetadata } from './lib/useSeoMetadata';
@@ -80,6 +83,51 @@ export default function App(){
 }
 function readRecoveryFlag(){try{return sessionStorage.getItem('studioflow_recovery')==='1';}catch{return false;}}
 
+/**
+ * Write the profile a Google sign-up promised.
+ *
+ * Shared by the OAuth return effect and `ProfileCompletionGate`, so the two
+ * paths cannot drift: the same customer RPC/referral claim and the same owner
+ * `profiles` row are used whether the details arrived with the OAuth redirect
+ * or were collected afterwards.
+ */
+async function applyGoogleSignupProfile(intent:GoogleOAuthIntent,values:GoogleSignupValues,userId:string):Promise<void>{
+ const missing=missingGoogleSignupFields(intent.role,values);
+ if(missing.length)throw new Error(`Google sign-up is missing ${missing.join(', ')}.`);
+ const fullName=values.fullName.trim();
+ const whatsappNumber=googleSignupWhatsApp(values);
+ if(intent.role==='customer'){
+  const metadata={
+   full_name:fullName,
+   date_of_birth:values.dateOfBirth,
+   whatsapp_number:whatsappNumber,
+   customer_referral_code:intent.referralCode,
+   source:'studioflow',
+  };
+  const updated=await supabase.auth.updateUser({data:metadata});
+  if(updated.error)throw new Error(updated.error.message);
+  const profile=await supabase.rpc('studioflow_customer_update_details',{
+   p_name:fullName,
+   p_phone:whatsappNumber,
+   p_whatsapp:whatsappNumber,
+   p_birth_date:values.dateOfBirth,
+  });
+  if(profile.error)throw new Error(profile.error.message);
+  if(intent.referralCode){
+   const referral=await supabase.rpc('studioflow_customer_claim_ref',{p_code:intent.referralCode});
+   if(referral.error)throw new Error(referral.error.message);
+   if(typeof window!=='undefined')window.dispatchEvent(new Event('nexora-customer-rewards-updated'));
+  }
+  return;
+ }
+ const salonName=values.salonName.trim();
+ const updated=await supabase.auth.updateUser({data:{full_name:fullName,salon_name:salonName,source:'studioflow'}});
+ if(updated.error)throw new Error(updated.error.message);
+ const profile=await supabase.from('profiles').update({full_name:fullName,salon_name:salonName}).eq('id',userId).select('id').maybeSingle();
+ if(profile.error)throw new Error(profile.error.message);
+ if(!profile.data)throw new Error('Your salon profile was not found. Please retry Google sign-up.');
+}
+
 /** Remove referral/auth entry parameters after their values have been captured.
  * This keeps a callback URL from replaying an old referral on the next render.
  */
@@ -105,7 +153,9 @@ function Application() {
  const entryTemplate=requestedTemplate(location.search);
  const createTemplate=new URLSearchParams(location.search).get('create')==='1';
  const ownerSlug=new URLSearchParams(location.search).get('owner');
- const isLoginRoute=/^\/login\/?$/.test(location.pathname);
+ // `/sign-in` and `/sign-up` are aliases of the same auth document, so all
+ // three land on `AuthPage` and keep their own mode.
+ const isLoginRoute=isAuthEntryPath(location.pathname);
  // Legacy root auth/create/owner/panel links keep working; new public links use /login explicitly.
  const reservedRootEntry=customer||recovery||!!ownerSlug||!!entryTemplate||createTemplate||new URLSearchParams(location.search).has('panel');
  const [authCallbackEntry]=useState(()=>hasAuthCallbackQuery(location.search)||hasAuthCallbackFragment(location.hash));
@@ -118,9 +168,13 @@ function Application() {
  const onRecovery=useCallback(()=>{try{sessionStorage.setItem('studioflow_recovery','1');}catch{}setRecovery(true);},[]);
  const {session,ready:authReady,error:authError}=useAuthSession(onRecovery);
  const pricingRedirectTarget=session&&!recovery&&isPricingPlanId(pricingPlanId)?pricingResumePath({planId:pricingPlanId,billingInterval:isBillingInterval(pricingBilling)?pricingBilling:'annual'}):'';
- const [googleOAuthStatus,setGoogleOAuthStatus]=useState<'idle'|'processing'|'error'>('idle');
+ const [googleOAuthStatus,setGoogleOAuthStatus]=useState<'idle'|'processing'|'incomplete'|'error'>('idle');
  const [googleOAuthMessage,setGoogleOAuthMessage]=useState('');
  const [googleOAuthRetry,setGoogleOAuthRetry]=useState(0);
+ // Details a Google sign-up still owes before the profile can be written.
+ const [googleProfileGate,setGoogleProfileGate]=useState<{intent:GoogleOAuthIntent;values:GoogleSignupValues}|null>(null);
+ const [googleGateBusy,setGoogleGateBusy]=useState(false);
+ const [googleGateError,setGoogleGateError]=useState('');
  useEffect(()=>{
   if(!authReady)return;
   const intent=readOAuthIntent();
@@ -163,38 +217,22 @@ function Application() {
      if(active){setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');}
      return;
     }
-    const fullName=intent.fullName.trim()||String(session.user.user_metadata?.full_name||session.user.user_metadata?.name||'').trim();
-    if(intent.role==='customer'){
-     if(!fullName||!intent.dateOfBirth||!intent.whatsappNumber)throw new Error('Google sign-up is missing required customer details. Please sign out and use Sign up to enter your name, date of birth and WhatsApp number.');
-     const metadata={
-      full_name:fullName,
-      date_of_birth:intent.dateOfBirth,
-      whatsapp_number:intent.whatsappNumber,
-      customer_referral_code:intent.referralCode,
-      source:'studioflow',
-     };
-     const updated=await supabase.auth.updateUser({data:metadata});
-     if(updated.error)throw new Error(updated.error.message);
-     const profile=await supabase.rpc('studioflow_customer_update_details',{
-      p_name:fullName,
-      p_phone:intent.whatsappNumber,
-      p_whatsapp:intent.whatsappNumber,
-      p_birth_date:intent.dateOfBirth,
-     });
-     if(profile.error)throw new Error(profile.error.message);
-     if(intent.referralCode){
-      const referral=await supabase.rpc('studioflow_customer_claim_ref',{p_code:intent.referralCode});
-      if(referral.error)throw new Error(referral.error.message);
-      if(typeof window!=='undefined')window.dispatchEvent(new Event('nexora-customer-rewards-updated'));
-     }
-    }else{
-     if(!fullName||!intent.salonName.trim())throw new Error('Google sign-up is missing your name or salon name. Please sign out and complete salon sign-up again.');
-     const updated=await supabase.auth.updateUser({data:{full_name:fullName,salon_name:intent.salonName.trim(),source:'studioflow'}});
-     if(updated.error)throw new Error(updated.error.message);
-     const profile=await supabase.from('profiles').update({full_name:fullName,salon_name:intent.salonName.trim()}).eq('id',session.user.id).select('id').maybeSingle();
-     if(profile.error)throw new Error(profile.error.message);
-     if(!profile.data)throw new Error('Your salon profile was not found. Please retry Google sign-up.');
+    const values=cleanGoogleSignupValues({
+     fullName:intent.fullName||String(session.user.user_metadata?.full_name||session.user.user_metadata?.name||''),
+     salonName:intent.salonName,
+     dateOfBirth:intent.dateOfBirth,
+     whatsappNumber:intent.whatsappNumber,
+    });
+    if(missingGoogleSignupFields(intent.role,values).length){
+     // Google carried the identity but not the details this sign-up needs (for
+     // example the account came from another device and the intent expired).
+     // Collect the rest in place — the old behaviour threw an error and forced
+     // a sign-out, stranding a brand-new account in the middle of onboarding.
+     clearOAuthIntent();
+     if(active){setGoogleProfileGate({intent,values});setGoogleOAuthStatus('incomplete');setGoogleOAuthMessage('');}
+     return;
     }
+    await applyGoogleSignupProfile(intent,values,session.user.id);
    }
    clearGoogleOAuthIntent();
    if(active){setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');}
@@ -246,6 +284,32 @@ function Application() {
  })().catch(e=>{if(active)setError(e.message||'Could not load your account');});return()=>{active=false;};
  },[session?.user?.id,retry,slug,customer,customerApp,recovery,skipReferral,ownerSlug,publicHomeRoute,oauthIntentPending,pricingRedirectTarget,googleOAuthStatus]);
  if(oauthIntentPending||pricingRedirectTarget)return <Loading text="Continuing to your destination…" />;
+ if(googleOAuthStatus==='incomplete'&&googleProfileGate){
+  // The session exists but Google did not carry every mandatory detail back.
+  // Finish the same sign-up instead of failing it.
+  const gate=googleProfileGate;
+  return <ProfileCompletionGate
+   role={gate.intent.role}
+   initial={gate.values}
+   busy={googleGateBusy}
+   error={googleGateError}
+   onSubmit={async values=>{
+    setGoogleGateBusy(true);setGoogleGateError('');
+    try{
+     await applyGoogleSignupProfile(gate.intent,values,session?.user?.id||'');
+     clearGoogleOAuthIntent();
+     setGoogleProfileGate(null);setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');
+     setRetry(n=>n+1);
+    }catch(caught){setGoogleGateError(messageOf(caught,'Your details could not be saved. Please retry.'));}
+    finally{setGoogleGateBusy(false);}
+   }}
+   onSignOut={async()=>{
+    clearGoogleOAuthIntent();
+    setGoogleProfileGate(null);setGoogleOAuthStatus('idle');setGoogleOAuthMessage('');
+    await supabase.auth.signOut();
+   }}
+  />;
+ }
  if(googleOAuthStatus==='processing')return <Loading text="Finishing your Google sign-in…" />;
  if(googleOAuthStatus==='error')return <main className="min-h-screen flex items-center justify-center bg-[#f9f9ff] px-4"><section className="workspace-card w-full max-w-lg"><h1 className="text-2xl font-bold mb-2">Finish Google sign-in</h1><p role="alert" className="mb-4 rounded-lg bg-amber-50 p-3 text-amber-900">{googleOAuthMessage}</p><div className="flex flex-wrap gap-3"><button className="primary-action" onClick={()=>setGoogleOAuthRetry(n=>n+1)}>Retry</button><button className="secondary-action" onClick={()=>void supabase.auth.signOut()}>Sign out</button></div></section></main>;
  if(recovery&&session)return <AuthPage recovery onRecovered={()=>{setRecovery(false);setRetry(r=>r+1);}} />;
@@ -257,7 +321,7 @@ function Application() {
  if(publicHomeRoute)return <PublicHomepage authenticated={Boolean(session)} />;
  if(!authReady)return <Loading text="Checking your session…" />;
  const urlAuthError=readAuthUrlError(location.search,location.hash);
- if(!session)return authEntry?<>{authError&&authError!==urlAuthError&&<p role="alert" className="p-4">{authError}</p>}<div className="bg-white border-b px-4 py-3 text-center text-sm">Looking for a salon appointment? <a className="text-violet-600 font-semibold" href="/?app=1">Open Nexora Customer App →</a></div><AuthPage /></>:<PublicHomepage />;
+ if(!session)return authEntry?<>{authError&&authError!==urlAuthError&&<p role="alert" className="p-4">{authError}</p>}<div className="bg-white border-b px-4 py-3 text-center text-sm">Looking for a salon appointment? <a className="text-violet-600 font-semibold" href="/?app=1">Open Nexora Customer App →</a></div><AuthPage initialMode={authModeForPath(location.pathname)||undefined} /></>:<PublicHomepage />;
  if(customer)return <CustomerBookings session={session} />;
  if(error)return <main className="p-8"><h1 className="text-2xl font-bold">Account could not load</h1><p role="alert" className="my-4">{error.includes('database') || error.includes('connection') ? 'There was a database connection issue. Please check your internet or try again later.' : error}</p><button className="primary-action" onClick={()=>setRetry(r=>r+1)}>Retry</button><button className="secondary-action ml-3" onClick={()=>void supabase.auth.signOut()}>Sign out</button><button className="secondary-action ml-3" onClick={()=>{localStorage.removeItem('studioflow_pending_ref');const url=new URL(location.href);url.searchParams.delete('ref');history.replaceState(null,'',url);setSkipReferral(true);setRetry(r=>r+1);}}>Continue without pending referral</button></main>;
  if(!account||account.user_id!==session.user.id)return <AccountLoading profileState={account?'user-mismatch':'loading'} userId={session.user.id} onRetry={()=>setRetry(r=>r+1)} onSignOut={()=>void supabase.auth.signOut()} />;
