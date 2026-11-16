@@ -113,7 +113,7 @@ async function graphSend(connection: Connection, to: string, payload: Row) {
 }
 
 async function logOutbound(
-  service: ReturnType<typeof createClient>,
+  service: any,
   connection: Connection,
   to: string,
   kind: string,
@@ -153,7 +153,7 @@ async function logOutbound(
 }
 
 async function logTemplate(
-  service: ReturnType<typeof createClient>,
+  service: any,
   connection: Connection,
   to: string,
   templateName: string,
@@ -218,7 +218,7 @@ async function logTemplate(
   }
 }
 
-async function getConnectionByPhone(service: ReturnType<typeof createClient>, phoneNumberId: string) {
+async function getConnectionByPhone(service: any, phoneNumberId: string) {
   const { data, error } = await service
     .from('salon_whatsapp_connections')
     .select('owner_id,phone_number_id,waba_id,access_token_ciphertext,access_token_iv,token_key_version,connection_status')
@@ -254,7 +254,7 @@ function validDate(value: string) {
     && date.getTime() <= Date.now() + 90 * 24 * 60 * 60 * 1000;
 }
 
-async function getSalon(service: ReturnType<typeof createClient>, ownerId: string) {
+async function getSalon(service: any, ownerId: string) {
   const { data, error } = await service
     .from('studioflow_websites')
     .select('slug,content')
@@ -264,7 +264,7 @@ async function getSalon(service: ReturnType<typeof createClient>, ownerId: strin
   return data as { slug: string; content: Row };
 }
 
-async function getCatalogue(service: ReturnType<typeof createClient>, ownerId: string) {
+async function getCatalogue(service: any, ownerId: string) {
   const website = await getSalon(service, ownerId);
   const rawServices = Array.isArray(website.content.services) ? website.content.services as Row[] : [];
   const services = rawServices.filter((item) => item && cleanText(item.id, 120) && cleanText(item.name, 120))
@@ -293,7 +293,7 @@ async function getCatalogue(service: ReturnType<typeof createClient>, ownerId: s
   };
 }
 
-async function saveConversation(service: ReturnType<typeof createClient>, ownerId: string, waId: string, patch: Row) {
+async function saveConversation(service: any, ownerId: string, waId: string, patch: Row) {
   const { data: existing } = await service
     .from('salon_whatsapp_conversations')
     .select('id,flow_state,is_opted_out')
@@ -322,7 +322,7 @@ async function saveConversation(service: ReturnType<typeof createClient>, ownerI
 }
 
 async function getAvailableSlots(
-  service: ReturnType<typeof createClient>,
+  service: any,
   slug: string,
   serviceId: string,
   date: string,
@@ -354,7 +354,7 @@ function menuText(name: string, services: Array<{ id: string; name: string; pric
 }
 
 async function processCustomerMessage(
-  service: ReturnType<typeof createClient>,
+  service: any,
   connection: Connection,
   message: Row,
   contactName: string,
@@ -739,7 +739,7 @@ async function processCustomerMessage(
   }
 }
 
-async function handlePaymentSuccess(service: ReturnType<typeof createClient>, bookingId: string, paymentId: string, amountPaise: number) {
+async function handlePaymentSuccess(service: any, bookingId: string, paymentId: string, amountPaise: number) {
   const { data: booking, error } = await service
     .from('studioflow_bookings')
     .select('id,owner_id,booking_source,status,payload')
@@ -823,7 +823,7 @@ async function handlePaymentSuccess(service: ReturnType<typeof createClient>, bo
   return { sent: true };
 }
 
-async function handleDeliveryStatuses(service: ReturnType<typeof createClient>, statuses: Row[]) {
+async function handleDeliveryStatuses(service: any, statuses: Row[]) {
   for (const status of statuses) {
     const messageId = cleanText(status.id, 200);
     const deliveryStatus = cleanText(status.status, 20);
