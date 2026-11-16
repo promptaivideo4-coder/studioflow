@@ -7,19 +7,13 @@ alter table public.studioflow_bookings
   add column if not exists booking_source text not null default 'website',
   add column if not exists external_idempotency_key text;
 
-do $
-begin
-  if not exists (
-    select 1 from pg_constraint
-    where conrelid='public.studioflow_bookings'::regclass
-      and conname='studioflow_bookings_booking_source_check'
-  ) then
-    alter table public.studioflow_bookings
-      add constraint studioflow_bookings_booking_source_check
-      check (booking_source in ('website','whatsapp','app','manual'));
-  end if;
-end
-$;
+alter table public.studioflow_bookings
+  drop constraint if exists studioflow_bookings_booking_source_check;
+
+alter table public.studioflow_bookings
+  add constraint studioflow_bookings_booking_source_check
+  check (booking_source in ('website','whatsapp','app','manual'));
+
 
 create unique index if not exists studioflow_bookings_owner_external_idempotency_uidx
   on public.studioflow_bookings(owner_id, external_idempotency_key)
