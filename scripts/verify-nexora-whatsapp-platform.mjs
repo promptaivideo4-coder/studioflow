@@ -70,7 +70,8 @@ assert.match(webhook, /flow_state\?\.optOut === true/);
 
 assert.match(payments, /whatsappPaymentLink/);
 assert.match(payments, /whatsappCancelPaymentLink/);
-assert.match(payments, /sameSecret\(requestToken,serviceKey\)/);
+assert.ok(payments.includes("sameSecret(token,serviceKey)"));
+assert.ok(payments.includes("studioflow_payments_verify_worker"));
 assert.match(payments, /depositPaise/);
 assert.match(payments, /payment_links/);
 assert.match(payments, /paymentLinkOrderKey\(created.id\)/);
