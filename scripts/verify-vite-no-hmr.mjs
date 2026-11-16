@@ -7,7 +7,7 @@ const probe = createServer();
 await new Promise((resolve, reject) => probe.once('error', reject).listen(0, '127.0.0.1', resolve));
 const port = probe.address().port;
 await new Promise(resolve => probe.close(resolve));
-const child = spawn(process.execPath, ['node_modules/tsx/dist/cli.mjs', 'server.ts', '--port', String(port)], {
+const child = spawn(process.execPath, ['--import', 'tsx', 'server.ts', '--port', String(port)], {
   env: { ...process.env, NODE_ENV: 'development', DISABLE_HMR: 'true' }, detached: true, stdio: ['ignore', 'pipe', 'pipe'],
 });
 let output = '';

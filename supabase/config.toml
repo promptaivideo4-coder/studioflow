@@ -1,0 +1,10 @@
+# Owner connection uses a valid Supabase JWT and performs an explicit Auth getUser() check.
+[functions.nexora-whatsapp-connect]
+verify_jwt = true
+
+# Provider webhooks have no Supabase JWT; handlers validate raw Meta/Razorpay signatures.
+[functions.nexora-whatsapp-webhook]
+verify_jwt = false
+
+[functions.studioflow-payments]
+verify_jwt = false
