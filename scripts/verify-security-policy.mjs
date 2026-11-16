@@ -88,6 +88,10 @@ for (const match of prerender.matchAll(/<script([^>]*)>/g)) {
 // Deployment must keep auth, sitemap, static assets and legacy Node APIs intact.
 assert.deepEqual(config.rewrites.map((entry) => [entry.source, entry.destination]), [
   ['/login', '/login.html'],
+  // `/sign-in` and `/sign-up` are aliases of the same login document, so the
+  // canonical, `noindex` login head is what those URLs receive.
+  ['/sign-in', '/login.html'],
+  ['/sign-up', '/login.html'],
   ['/sitemap.xml', '/api/sitemap'],
   ['/salon-os', '/salon-os/index.html'],
   ['/pricing', '/pricing/index.html'],
@@ -99,6 +103,13 @@ assert.deepEqual(config.rewrites.map((entry) => [entry.source, entry.destination
   ['/partner-rewards', '/partner-rewards/index.html'],
   ['/(.*)', '/index.html'],
 ]);
+// `www` must 308 to the canonical origin instead of serving a duplicate host.
+const wwwRedirect = (config.redirects || []).find((entry) =>
+  (entry.has || []).some((condition) => condition.type === 'host' && condition.value === 'www.nexorasalon.online'));
+assert.ok(wwwRedirect, 'the www host must redirect to the canonical origin');
+assert.equal(wwwRedirect.permanent, true, 'the canonical redirect must be permanent (308)');
+assert.equal(wwwRedirect.destination, 'https://nexorasalon.online/$1', 'the canonical redirect must preserve the path');
+
 // Every prerendered marketing document must also be routed to by a rewrite,
 // otherwise the SPA shell answers the URL and the per-route head is never sent.
 for (const route of ['/salon-os', '/pricing', '/privacy', '/salon-onboarding', '/salon-growth', '/growth-partner-rewards', '/partner-rewards']) {
@@ -111,6 +122,7 @@ const server = readFileSync('server.ts', 'utf8');
 for (const route of [
   '/api/health', '/api/generate-bio', '/api/generate-promo-image', '/api/generate-promo-copy',
   '/api/veda-website-content', '/api/ai-recommendations', '/api/email-service-status', '/api/send-booking-email',
+  '/api/booking-deposit',
 ]) assert.ok(server.includes(`"${route}"`), `legacy API route must remain registered: ${route}`);
 assert.ok(server.includes('app.get("/sitemap.xml", sitemapHandler)'));
 assert.ok(server.includes('app.all("/api/*"'), 'unknown API paths must stay JSON 404s, not SPA HTML');

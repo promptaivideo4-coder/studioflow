@@ -27,6 +27,8 @@ import {
   sendJson,
 } from "./server/httpSafety";
 import { rateLimit } from "./server/rateLimit";
+import { canonicalHostRedirect } from "./server/canonicalHost";
+import { bookingDepositHandler } from "./server/bookingDeposit";
 import { optionalVerifiedUser, requireVerifiedUser } from "./server/supabaseAuth";
 
 /** Rejects huge or malformed bodies before they reach the AI provider. */
@@ -97,6 +99,12 @@ async function startServer() {
   // AI prompts are small; capping the body keeps a large payload from reaching
   // the provider or the JSON parser's memory.
   app.use(express.json({ limit: '256kb' }));
+
+  // `https://nexorasalon.online` is the single canonical origin. The `www` host
+  // and plain-http requests are answered with a 308 that preserves method and
+  // path, matching the `redirects` rule in vercel.json. Preview/ephemeral hosts
+  // (`.vercel.app`, `.e2b.app`, localhost, IPs) are never redirected.
+  app.use(canonicalHostRedirect());
 
   // Defence in depth behind asyncHandler: a stray rejection is logged instead of
   // taking the API down. See server/httpSafety.ts for the full rationale.
@@ -545,6 +553,13 @@ Return strictly valid JSON in this format:
   // stored booking before delivery.
   app.post("/api/send-booking-email", bookingEmailHandler);
 
+  // Server-authoritative 25% booking deposit. The database (`register_payment`)
+  // and the payments edge function remain the money-authoritative layers; this
+  // endpoint lets the Node layer quote the mandatory deposit and reject an
+  // under-paid booking instead of trusting a browser amount.
+  const depositLimiter = rateLimit({ name: 'booking-deposit', windowMs: 10 * 60 * 1000, max: 120 });
+  app.all("/api/booking-deposit", depositLimiter, bookingDepositHandler);
+
   // Terminal error handler: an unexpected throw becomes a logged 500 JSON
   // response instead of an unhandled rejection that stops the server.
   app.use(apiErrorHandler());
@@ -588,8 +603,9 @@ Return strictly valid JSON in this format:
       server: { middlewareMode: true, allowedHosts: ['.e2b.app', 'localhost', '127.0.0.1'], hmr: disableHmr ? false : { server: httpServer } },
       appType: "spa",
     });
-    // Serve route-owned login metadata while preserving auth/template query state.
-    app.get(/^\/login\/?$/, (req, _res, next) => {
+    // Serve route-owned login metadata while preserving auth/template query
+    // state. `/sign-in` and `/sign-up` are aliases of the same document.
+    app.get(/^\/(?:login|sign-in|sign-up)\/?$/, (req, _res, next) => {
       const query = req.url.includes('?') ? req.url.slice(req.url.indexOf('?')) : '';
       req.url = '/login.html' + query;
       next();
@@ -608,7 +624,7 @@ Return strictly valid JSON in this format:
     app.all("/api/*", (_req, res) => {
       res.status(404).json({error:'Unknown API endpoint'});
     });
-    app.get(/^\/login\/?$/, (_req, res) => {
+    app.get(/^\/(?:login|sign-in|sign-up)\/?$/, (_req, res) => {
       res.sendFile(path.join(distPath, "login.html"));
     });
     // The SalonOS landing page ships as its own prerendered document.
