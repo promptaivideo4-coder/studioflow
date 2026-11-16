@@ -457,7 +457,7 @@ async function processCustomerMessage(
             last_inbound_at: new Date().toISOString(),
             last_message_id: messageId,
           });
-          await logOutbound(service, connection, waId, `Aapne ${serviceChoice.name} chuna hai. Branch number select karein:\n${options}`);
+          await logOutbound(service, connection, waId, 'conversation', `Aapne ${serviceChoice.name} chuna hai. Branch number select karein:\n${options}`);
         } else {
           flow = { ...flow, stage: 'choose_date', branchId: catalogue.branches[0]?.id || null, branchName: catalogue.branches[0]?.name || null };
           await saveConversation(service, connection.owner_id, waId, {
@@ -467,14 +467,14 @@ async function processCustomerMessage(
             last_inbound_at: new Date().toISOString(),
             last_message_id: messageId,
           });
-          await logOutbound(service, connection, waId, `Aapne ${serviceChoice.name} chuna hai. Appointment date bhejein (YYYY-MM-DD).`);
+          await logOutbound(service, connection, waId, 'conversation', `Aapne ${serviceChoice.name} chuna hai. Appointment date bhejein (YYYY-MM-DD).`);
         }
       }
     } else if (stage === 'choose_branch') {
       const position = parseChoice(text, catalogue.branches.length);
       if (position < 0) {
         const options = catalogue.branches.map((branch, index) => `${index + 1}. ${branch.name} — ${branch.city}`).join('\n');
-        await logOutbound(service, connection, waId, `Branch number sahi nahi hai.\n${options}`);
+        await logOutbound(service, connection, waId, 'conversation', `Branch number sahi nahi hai.\n${options}`);
       } else {
         const branch = catalogue.branches[position];
         flow = { ...flow, stage: 'choose_date', branchId: branch.id, branchName: branch.name };
@@ -485,15 +485,15 @@ async function processCustomerMessage(
           last_inbound_at: new Date().toISOString(),
           last_message_id: messageId,
         });
-        await logOutbound(service, connection, waId, `Branch ${branch.name} select ho gayi. Appointment date bhejein (YYYY-MM-DD).`);
+        await logOutbound(service, connection, waId, 'conversation', `Branch ${branch.name} select ho gayi. Appointment date bhejein (YYYY-MM-DD).`);
       }
     } else if (stage === 'choose_date') {
       if (!validDate(text)) {
-        await logOutbound(service, connection, waId, 'Date YYYY-MM-DD format mein bhejein. Aaj se agle 90 din tak date choose kar sakte hain.');
+        await logOutbound(service, connection, waId, 'conversation', 'Date YYYY-MM-DD format mein bhejein. Aaj se agle 90 din tak date choose kar sakte hain.');
       } else {
         const slots = await getAvailableSlots(service, catalogue.website.slug, String(flow.serviceId), text, typeof flow.branchId === 'string' ? flow.branchId : null);
         if (!slots.length) {
-          await logOutbound(service, connection, waId, 'Is date par koi time available nahi hai. Dusri date bhejein (YYYY-MM-DD).');
+          await logOutbound(service, connection, waId, 'conversation', 'Is date par koi time available nahi hai. Dusri date bhejein (YYYY-MM-DD).');
         } else {
           const choices = slots.slice(0, 12).map((slot, index) => {
             const stylist = catalogue.stylists.find((person) => person.id === slot.stylistId);
@@ -514,7 +514,7 @@ async function processCustomerMessage(
             last_message_id: messageId,
           });
           const options = choices.map((slot, index) => `${index + 1}. ${slot.time} — ${slot.stylistName}`).join('\n');
-          await logOutbound(service, connection, waId, `Available times on ${text}:\n${options}\n\nTime ka number reply karein.`);
+          await logOutbound(service, connection, waId, 'conversation', `Available times on ${text}:\n${options}\n\nTime ka number reply karein.`);
         }
       }
     } else if (stage === 'choose_time') {
@@ -522,7 +522,7 @@ async function processCustomerMessage(
       const position = parseChoice(text, slots.length);
       if (position < 0) {
         const options = slots.map((slot, index) => `${index + 1}. ${slot.time} — ${slot.stylistName}`).join('\n');
-        await logOutbound(service, connection, waId, `Time number sahi nahi hai.\n${options}`);
+        await logOutbound(service, connection, waId, 'conversation', `Time number sahi nahi hai.\n${options}`);
       } else {
         const selected = slots[position];
         flow = {
