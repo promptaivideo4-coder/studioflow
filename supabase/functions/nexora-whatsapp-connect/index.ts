@@ -190,7 +190,7 @@ Deno.serve(async (req: Request) => {
           bookingRequests: bookings.filter((row) => row.status === 'pending').length,
           cancellations: bookings.filter((row) => row.status === 'cancelled').length,
           inboundMessages: messages.filter((row) => row.direction === 'inbound').length,
-          outboundMessages: messages.filter((row) => row.direction === 'outbound').length,
+          outboundMessages: messages.filter((row) => row.direction === 'outbound' && ['sent', 'delivered', 'read'].includes(row.delivery_status)).length,
           deliveredMessages: messages.filter((row) => row.delivery_status === 'delivered' || row.delivery_status === 'read').length,
           paymentLinks: payments.filter((row) => Boolean(row.payment_link_id)).length,
           paidPayments: payments.filter((row) => row.status === 'captured').length,
@@ -433,13 +433,13 @@ Deno.serve(async (req: Request) => {
         business_id: isMetaId(body.businessId) ? body.businessId : null,
         display_phone_number: phone.display_phone_number,
         verified_name: typeof phone.verified_name === 'string' ? phone.verified_name : null,
-        connection_status: 'connected',
+        connection_status: 'pending',
         ...encrypted,
         token_key_version: 1,
         token_expires_at: expiresAt,
         webhook_subscribed: true,
         connected_by: ownerId,
-        connected_at: new Date().toISOString(),
+        connected_at: null,
         disconnected_at: null,
         connection_mode: connectionMode,
         is_on_biz_app: isOnBizApp,
@@ -464,11 +464,11 @@ Deno.serve(async (req: Request) => {
       return respond({
         ok: true,
         connection: {
-          connection_status: 'connected',
+          connection_status: 'pending',
           display_phone_number: phone.display_phone_number,
           verified_name: typeof phone.verified_name === 'string' ? phone.verified_name : null,
           webhook_subscribed: true,
-          connected_at: new Date().toISOString(),
+          connected_at: null,
           connection_mode: connectionMode,
           is_on_biz_app: isOnBizApp,
         },
@@ -477,7 +477,7 @@ Deno.serve(async (req: Request) => {
 
     if (action === 'disconnect') {
       const { error } = await admin.from('salon_whatsapp_connections')
-        .update({ connection_status: 'disconnected', disconnected_at: new Date().toISOString(), webhook_subscribed: false })
+        .update({ connection_status: 'disconnected', disconnected_at: new Date().toISOString(), webhook_subscribed: false, access_token_ciphertext: '', access_token_iv: '' })
         .eq('owner_id', ownerId);
       if (error) return respond({ error: 'Could not disconnect this WhatsApp number.' }, 503);
       return respond({ ok: true, disconnected: true });
