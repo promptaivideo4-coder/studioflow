@@ -93,56 +93,6 @@ Deno.serve(async(req:Request)=>{
     if(webhookSignature){
       if(!creds.configured||!creds.webhookSecret)return respond({error:'Webhook configuration missing'},503);
       if(!await signatureMatches(creds.webhookSecret,raw,webhookSignature))return respond({error:'Invalid webhook signature'},401);
-      if(body.event==='payment_link.paid'){
-        const eventLink=body.payload?.payment_link?.entity;
-        if(eventLink?.id&&eventLink.status==='paid'){
-          const {data:known}=await service.from('studioflow_payment_orders')
-            .select('booking_id,order_id,payment_link_id,amount_paise')
-            .eq('payment_link_id',eventLink.id).maybeSingle();
-          if(known&&Number(known.amount_paise)>0){
-            // Razorpay's Payment Link entity is keyed by payment_link_id and
-            // reference_id; the create response does not require/order an order_id.
-            // Re-fetch the signed link and its captured payment before settlement.
-            const liveLink=await provider('payment_links/'+encodeURIComponent(eventLink.id));
-            const noteBooking=liveLink.notes?.studioflow_booking;
-            if(liveLink.id===known.payment_link_id&&liveLink.status==='paid'&&
-              Number(liveLink.amount)===Number(known.amount_paise)&&
-              Number(liveLink.amount_paid)>=Number(known.amount_paise)&&
-              noteBooking===known.booking_id){
-              const paymentRows=Array.isArray(liveLink.payments)?liveLink.payments:[];
-              const eventPayment=body.payload?.payment?.entity;
-              const paymentId=typeof eventPayment?.id==='string'
-                ? eventPayment.id
-                : (paymentRows.find((row:any)=>typeof row.payment_id==='string'||typeof row.id==='string')?.payment_id||
-                   paymentRows.find((row:any)=>typeof row.id==='string')?.id||'');
-              if(paymentId){
-                const payment=await provider('payments/'+encodeURIComponent(paymentId));
-                if(payment.id===paymentId&&payment.status==='captured'&&payment.currency==='INR'&&
-                  payment.order_id===liveLink.order_id&&liveLink.order_id===known.order_id&&
-                  Number(payment.amount)===Number(known.amount_paise)){
-                  const settled=await service.rpc('studioflow_settle_payment',{
-                    p_order:known.order_id,p_payment:paymentId,p_amount:Number(payment.amount)
-                  });
-                  if(settled.error)throw new Error('Could not settle the verified WhatsApp payment link.');
-                  if(settled.data?.refund_required){
-                    await refundPayment(known.order_id,paymentId,Number(known.amount_paise));
-                  }else{
-                    await service.from('studioflow_payment_orders')
-                      .update({payment_link_status:'paid'}).eq('booking_id',known.booking_id);
-                    const notifyUrl=url+'/functions/v1/nexora-whatsapp-webhook';
-                    await fetch(notifyUrl,{
-                      method:'POST',
-                      headers:{Authorization:'Bearer '+serviceKey,'Content-Type':'application/json'},
-                      body:JSON.stringify({action:'paymentReceipt',bookingId:known.booking_id,paymentId}),
-                      signal:AbortSignal.timeout(15000)
-                    }).catch(()=>null);
-                  }
-                }
-              }
-            }
-          }
-        }
-      }
       if(body.event==='payment_link.expired'||body.event==='payment_link.cancelled'){
         const link=body.payload?.payment_link?.entity;
         if(link?.id){
