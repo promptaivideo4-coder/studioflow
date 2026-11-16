@@ -103,14 +103,16 @@ function metaConfiguration() {
   const appId = env('META_APP_ID');
   const configId = env('META_EMBEDDED_SIGNUP_CONFIG_ID');
   const graphVersion = env('META_GRAPH_API_VERSION');
-  const missing = [
+  const required: Array<[string, string]> = [
     ['META_APP_ID', appId],
     ['META_APP_SECRET', env('META_APP_SECRET')],
     ['META_EMBEDDED_SIGNUP_CONFIG_ID', configId],
     ['META_GRAPH_API_VERSION', graphVersion],
     ['META_WEBHOOK_VERIFY_TOKEN', env('META_WEBHOOK_VERIFY_TOKEN')],
     ['META_TOKEN_ENCRYPTION_KEY', env('META_TOKEN_ENCRYPTION_KEY')],
-  ].filter(([, value]) => !value).map(([name]) => name);
+  ];
+  const missing = required.filter(([, value]) => !value).map(([name]) => name);
+  if (graphVersion && !/^v\\d+\\.\\d+$/.test(graphVersion)) missing.push('META_GRAPH_API_VERSION (format: v27.0)');
   return { appId, configId, graphVersion, missing };
 }
 
@@ -178,7 +180,8 @@ Deno.serve(async (request: Request) => {
     return new Response('ok', { headers: corsFor(request) });
   }
   if (request.method !== 'POST') return json(request, { error: 'POST required' }, 405);
-  if (!corsFor(request)['Access-Control-Allow-Origin']) return json(request, { error: 'Origin not allowed' }, 403);
+  const origin = request.headers.get('origin') || '';
+  if (!allowedOrigins.has(origin)) return json(request, { error: 'Origin not allowed' }, 403);
 
   try {
     const supabaseUrl = env('SUPABASE_URL');
