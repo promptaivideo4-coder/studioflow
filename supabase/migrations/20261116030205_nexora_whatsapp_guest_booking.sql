@@ -13,6 +13,12 @@ create index if not exists studioflow_bookings_owner_whatsapp_created_idx
   on public.studioflow_bookings(owner_id, created_at desc)
   where booking_source = 'whatsapp';
 
+alter table public.salon_whatsapp_connections
+  add column if not exists is_on_biz_app boolean not null default false,
+  add column if not exists platform_type text,
+  add column if not exists primary_waac_ids jsonb not null default '[]'::jsonb,
+  add column if not exists connection_mode text not null default 'standard';
+
 alter table public.salon_whatsapp_conversations
   add column if not exists is_opted_out boolean not null default false,
   add column if not exists opted_out_at timestamptz,
