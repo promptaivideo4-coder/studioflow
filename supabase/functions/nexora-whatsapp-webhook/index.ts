@@ -274,7 +274,8 @@ async function getCatalogue(service: ReturnType<typeof createClient>, ownerId: s
       price: Number(item.price || 0),
       durationMinutes: Number(item.durationMinutes || 0),
     }))
-    .filter((item) => Number.isFinite(item.price) && item.price >= 0 && Number.isInteger(item.durationMinutes) && item.durationMinutes > 0);
+    .filter((item) => Number.isFinite(item.price) && item.price >= 0 && Number.isInteger(item.durationMinutes) && item.durationMinutes > 0)
+    .slice(0, 9);
   const { data: branches, error } = await service
     .from('branches')
     .select('id,name,city')
@@ -385,7 +386,7 @@ async function processCustomerMessage(
       .select('id,processing_status')
       .eq('provider_event_id', messageId)
       .maybeSingle();
-    if (prior?.processing_status === 'processed' || prior?.processing_status === 'ignored') return;
+    if (prior?.processing_status === 'processed' || prior?.processing_status === 'ignored' || prior?.processing_status === 'processing') return;
     if (prior?.id) {
       await service.from('salon_whatsapp_webhook_events').update({ processing_status: 'processing', error_code: null }).eq('id', prior.id);
     } else return;
