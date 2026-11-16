@@ -72,6 +72,7 @@ begin
     or coalesce(p_time,'') !~ '^(?:[01][0-9]|2[0-3]):[0-5][0-9]$'
     or coalesce(p_stylist_id,'') = ''
     or length(v_name) < 2
+    or length(regexp_replace(v_phone,'[^0-9]','','g')) not between 10 and 15
     or length(v_wa_id) not between 8 and 15
     or v_idempotency !~ '^[a-f0-9]{64}$'
   then
@@ -123,6 +124,13 @@ begin
 
   if v_branch_count>1 and p_branch_id is null then
     raise exception 'Choose a salon branch before booking';
+  end if;
+  if v_branch_count=1 and p_branch_id is null then
+    select id into p_branch_id
+    from public.branches
+    where site_id=p_owner_id and is_active
+    order by created_at asc
+    limit 1;
   end if;
   if p_branch_id is not null and not exists(
     select 1 from public.branches
