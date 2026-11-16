@@ -116,7 +116,7 @@ function metaConfiguration() {
   return { appId, configId, graphVersion, missing };
 }
 
-async function getAuthenticatedOwner(request: Request, service: ReturnType<typeof createClient>) {
+async function getAuthenticatedOwner(request: Request, service: any) {
   const authorization = request.headers.get('authorization') || '';
   const token = authorization.replace(/^Bearer\s+/i, '');
   if (!token) throw new Error('Sign in to your salon owner account first.');
@@ -138,7 +138,7 @@ async function getAuthenticatedOwner(request: Request, service: ReturnType<typeo
   return { user: data.user, ownerId, website };
 }
 
-async function dashboardMetrics(service: ReturnType<typeof createClient>, ownerId: string) {
+async function dashboardMetrics(service: any, ownerId: string) {
   const { data: bookings, error: bookingsError } = await service
     .from('studioflow_bookings')
     .select('id,status,payload')
