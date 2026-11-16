@@ -3,6 +3,7 @@ import { readFileSync } from 'node:fs';
 
 const migration = readFileSync('supabase/migrations/20261115173757_nexora_salon_whatsapp_platform.sql', 'utf8');
 const tenancyMigration = readFileSync('supabase/migrations/20261115174514_nexora_whatsapp_studioflow_tenancy.sql', 'utf8');
+const guestBookingMigration = readFileSync('supabase/migrations/20261116030205_nexora_whatsapp_guest_booking.sql', 'utf8');
 const guide = readFileSync('docs/integrations/nexora-salon-owned-whatsapp-booking.md', 'utf8');
 
 for (const table of [
@@ -31,6 +32,12 @@ assert.ok(tenancyMigration.includes('owner_id uuid not null references public.st
 assert.ok(tenancyMigration.includes('references public.studioflow_bookings(id)'));
 assert.ok(tenancyMigration.includes('references public.studioflow_payment_orders(booking_id)'));
 assert.ok(tenancyMigration.includes('rename column payment_order_id to studioflow_payment_booking_id'));
+assert.ok(guestBookingMigration.includes('alter column customer_id drop not null'));
+assert.ok(guestBookingMigration.includes('studioflow_whatsapp_book_guest'));
+assert.ok(guestBookingMigration.includes('booking_source,external_idempotency_key'));
+assert.ok(guestBookingMigration.includes('revoke all on function public.studioflow_whatsapp_book_guest'));
+assert.ok(guestBookingMigration.includes('grant execute on function public.studioflow_whatsapp_book_guest'));
+assert.ok(guestBookingMigration.includes('studioflow_branch_android_slots'));
 assert.ok(guide.includes('studioflow_accounts.user_id'));
 assert.ok(guide.includes('studioflow_bookings'));
 assert.ok(guide.includes('studioflow_payment_orders'));
