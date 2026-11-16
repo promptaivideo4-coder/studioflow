@@ -1,0 +1,27 @@
+import assert from 'node:assert/strict';
+import { createHash } from 'node:crypto';
+import { readdirSync, readFileSync } from 'node:fs';
+
+// This inventory comes from the owner's production history export, not from
+// a generated fixture catalog. Never mark remote migrations applied here.
+const manifest = JSON.parse(readFileSync('docs/integrations/restored-supabase-history.json', 'utf8'));
+const directory = 'supabase/migrations';
+const files = readdirSync(directory).filter(name => /^\d+_.+\.sql$/.test(name));
+const byVersion = new Map();
+for (const file of files) {
+  const version = file.split('_', 1)[0];
+  assert(!byVersion.has(version), `Duplicate migration version: ${version}`);
+  byVersion.set(version, file);
+}
+assert.equal(new Set(manifest.applied_versions).size, manifest.applied_versions_in_export);
+for (const version of manifest.applied_versions) {
+  assert(byVersion.has(version), `Missing recorded applied migration: ${version}`);
+}
+for (const record of manifest.restored) {
+  const expectedName = `${record.version}_${record.name}.sql`;
+  assert.equal(byVersion.get(record.version), expectedName);
+  const content = readFileSync(`${directory}/${expectedName}`);
+  assert.equal(createHash('sha256').update(content).digest('hex'), record.file_sha256,
+    `Recorded applied SQL changed: ${expectedName}; use a new additive migration`);
+}
+console.log(`PASS: all ${manifest.applied_versions.length} recorded applied versions exist once; ${manifest.restored.length} restored SQL files match their recorded hashes. Live migration execution is not tested.`);
