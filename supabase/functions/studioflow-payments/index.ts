@@ -73,6 +73,30 @@ Deno.serve(async(req:Request)=>{
       }
       return {processed:jobs.length,results};
     };
+    const notifyWhatsAppPaymentSuccess=async(bookingId:string,paymentId:string,amountPaise:number)=>{
+      // The WhatsApp sender is selected by the booking's owner_id. Only call
+      // this after the canonical settlement RPC has confirmed the 25% advance.
+      const {data:booking,error}=await service.from('studioflow_bookings')
+        .select('id,owner_id,booking_source,status')
+        .eq('id',bookingId)
+        .maybeSingle();
+      if(error||!booking||booking.booking_source!=='whatsapp'||booking.status!=='confirmed')return;
+      try{
+        const notify=await fetch(`${url.replace(/\\/$/,'')}/functions/v1/nexora-whatsapp-webhook`,{
+          method:'POST',
+          headers:{'Content-Type':'application/json','x-nexora-internal-key':serviceKey},
+          body:JSON.stringify({action:'payment_success',bookingId,paymentId,amountPaise}),
+          signal:AbortSignal.timeout(12000)
+        });
+        if(!notify.ok){
+          const detail=await notify.text().catch(()=>'');
+          console.error('WhatsApp payment notice was not delivered',notify.status,detail.slice(0,300));
+        }
+      }catch(error){
+        // A WhatsApp delivery outage must never roll back a verified Razorpay payment.
+        console.error('WhatsApp payment notice could not be sent',error instanceof Error?error.message:'unknown error');
+      }
+    };
     const settle=async(orderId:string,paymentId:string)=>{
       const {data:order,error}=await service.from('studioflow_payment_orders').select('*').eq('order_id',orderId).single();
       if(error)throw new Error('Payment order not found');
@@ -86,13 +110,14 @@ Deno.serve(async(req:Request)=>{
         const refund=await refundPayment(orderId,paymentId,order.amount_paise);
         return {...result.data,...refund};
       }
+      await notifyWhatsAppPaymentSuccess(order.booking_id,paymentId,payment.amount);
       return result.data;
     };
 
     if(webhookSignature){
       if(!creds.configured||!creds.webhookSecret)return respond({error:'Webhook configuration missing'},503);
       if(!await signatureMatches(creds.webhookSecret,raw,webhookSignature))return respond({error:'Invalid webhook signature'},401);
-      if(body.event==='payment.captured'){
+      if(body.event==='payment.captured'||body.event==='payment_link.paid'){
         const p=body.payload?.payment?.entity;
         const {data:known}=await service.from('studioflow_payment_orders').select('booking_id').eq('order_id',p?.order_id||'').maybeSingle();
         if(known&&p?.id&&p?.order_id)await settle(p.order_id,p.id);
