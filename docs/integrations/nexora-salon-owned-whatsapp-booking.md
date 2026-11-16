@@ -58,20 +58,26 @@ Metrics must be derived from StudioFlow booking/payment rows and message logs, n
 
 ## Rollout gates
 
-1. Meta business verification, Tech Provider / Embedded Signup access, App Review and required WhatsApp permissions.
-2. Add Supabase secrets for Meta app credentials, webhook verify token, token encryption key, and provider-specific signing secrets. Never paste secrets into chat or commit them.
-3. Implement and test Embedded Signup callback, encrypted token storage and webhook verification.
-4. Implement guest booking adapter through the canonical reservation function and prove concurrency/idempotency.
-5. Integrate the configured payment provider and verified payment webhook.
-6. Add owner dashboard setup, booking metrics and message/payment timeline.
-7. Run isolation tests across at least two salons and all 16 template renderers, including wrong-tenant, replayed webhook, expired token, duplicate booking, unavailable slot, failed payment and webhook retry cases.
-8. Enable production only after Meta approval, payment provider live configuration and end-to-end verification.
+1. Meta business verification, Tech Provider / Embedded Signup access, App Review and the required `whatsapp_business_messaging` and `whatsapp_business_management` permissions.
+2. Add Supabase Edge Function secrets: `META_APP_ID`, `META_APP_SECRET`, `META_EMBEDDED_SIGNUP_CONFIG_ID`, `META_GRAPH_API_VERSION`, `META_WEBHOOK_VERIFY_TOKEN`, `META_TOKEN_ENCRYPTION_KEY`, and existing Razorpay live/webhook credentials. Add `META_WHATSAPP_PAYMENT_SUCCESS_TEMPLATE` and `META_WHATSAPP_TEMPLATE_LANGUAGE` for notifications outside the 24-hour service window. Never paste secrets into chat or commit them.
+3. Complete a Meta Embedded Signup v4 test with a real salon business and verify the returned phone number belongs to the selected WABA.
+4. Complete a live inbound test message, then confirm the reply is sent from that salon's connected phone number.
+5. Complete an end-to-end test booking: explicit YES confirmation, live slot recheck, owner calendar entry, 25% Razorpay payment link, verified payment webhook, booking confirmation and WhatsApp receipt.
+6. Run isolation tests across at least two salons and all 16 template renderers, including wrong-tenant, duplicate/replayed webhook, expired token, duplicate booking, unavailable slot, failed payment, STOP opt-out and webhook retry cases.
+7. Enable production for public salon owners only after Meta approval, provider live configuration and successful end-to-end verification.
 
 ## Current implementation status
 
-The database foundation and StudioFlow tenancy migrations are applied to the NEXORA Supabase production project. All five tenant-scoped tables exist, RLS is enabled, browser-role access is revoked, and only trusted server-side service-role functions can read or write them. Connections, OAuth states, conversations and message logs are keyed to `studioflow_accounts.user_id`. Message records reference the canonical `studioflow_bookings` and `studioflow_payment_orders` tables used by the current salon owner dashboard.
+**Already applied to the production Supabase database:** the five WhatsApp connection, OAuth, event, conversation and message-log tables; RLS and browser-role access revocation; canonical StudioFlow owner/booking/payment mapping.
 
-This foundation does not create a live Meta connection, enable production webhooks, create real WhatsApp bookings, send WhatsApp messages or process payments. Keep production claims disabled until every rollout gate above is verified.
+**Added in the current implementation branch (not yet merged or deployed):**
+- Owner dashboard panel to connect, view, and disconnect each salon's own WhatsApp number.
+- Meta code exchange, single-use owner-bound OAuth state, WABA phone ownership validation and AES-256-GCM token encryption.
+- Meta webhook signature verification, phone-number-ID tenant routing, inbound/delivery event deduplication, customer opt-out and an interactive booking conversation.
+- Service-role-only guest booking RPC that rechecks current slots, branch/staff availability, stores `booking_source='whatsapp'`, and applies idempotency.
+- Razorpay payment-link creation for the existing 25% advance rule, plus a payment-success notice after the existing verified settlement RPC.
+
+**Not live yet:** the new guest-booking migration, two WhatsApp Edge Functions, owner panel and payment-notice hook still need final CI, merge and deployment. No salon WhatsApp number is connected yet. Production use also requires the Meta app/configuration/approval and the server secrets listed above. Do not present a salon as connected until Meta has returned and NEXORA has verified its actual WABA phone number.
 
 ## Migration history recovery
 
