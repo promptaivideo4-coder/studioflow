@@ -328,7 +328,7 @@ export const NexoraWhatsAppPanel: React.FC<{ onBookingsChanged?: () => Promise<v
         },
       });
       if (completed.error || !completed.data?.ok) throw new Error(completed.data?.error || completed.error?.message || 'WhatsApp connection could not be saved.');
-      setNotice({ kind: 'success', text: `WhatsApp ${completed.data.connection?.display_phone_number || ''} is connected to this salon.` });
+      setNotice({ kind: 'info', text: `WhatsApp ${completed.data.connection?.display_phone_number || ''} is linked. Send HI from another phone to verify messages before accepting bookings.` });
       await onBookingsChanged?.();
       await refresh();
     } catch (error) {
@@ -358,6 +358,7 @@ export const NexoraWhatsAppPanel: React.FC<{ onBookingsChanged?: () => Promise<v
   const connection = status?.connection;
   const metrics = status?.metrics || EMPTY_METRICS;
   const connected = connection?.connection_status === 'connected';
+  const pending = connection?.connection_status === 'pending';
 
   return (
     <div className="space-y-5">
@@ -370,7 +371,7 @@ export const NexoraWhatsAppPanel: React.FC<{ onBookingsChanged?: () => Promise<v
               Customer replies will come from your salon’s own WhatsApp Business number. Each salon has its own connection and private message history.
             </p>
           </div>
-          <span className={connected ? 'status confirmed' : 'status pending'}>{connected ? 'Connected' : 'Not connected'}</span>
+          <span className={connected ? 'status confirmed' : 'status pending'}>{connected ? 'Connected' : pending ? 'Verification pending' : 'Not connected'}</span>
         </div>
 
         {notice && (
@@ -393,6 +394,14 @@ export const NexoraWhatsAppPanel: React.FC<{ onBookingsChanged?: () => Promise<v
               </div>
               <button type="button" className="secondary-action" disabled={busy} onClick={disconnect}>{busy ? 'Please wait…' : 'Disconnect number'}</button>
             </div>
+          </div>
+        ) : pending ? (
+          <div className="mt-5 rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <h3 className="font-bold text-slate-900">Verify your salon number</h3>
+            <p className="mt-1 font-semibold">{connection?.display_phone_number}</p>
+            <p className="muted mt-2">Send HI to this number from another WhatsApp phone. After the salon number replies, refresh activity to check that it is connected.</p>
+            <p className="muted mt-2">If no reply arrives, ask platform support to check Meta phone registration and webhook setup.</p>
+            <button type="button" className="secondary-action mt-4" disabled={busy} onClick={disconnect}>Disconnect number</button>
           </div>
         ) : (
           <div className="mt-5 rounded-2xl border border-slate-200 bg-slate-50 p-4">
