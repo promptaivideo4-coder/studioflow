@@ -1123,5 +1123,29 @@
     "20261115132100_studioflow_whatsapp_test_booking_api.sql",
     "20261115133000_private_whatsapp_test_rate_limit.sql",
     "20261116100000_nexora_whatsapp_optional_profiles.sql"
+  ],
+  "historical_edge_references": [
+    {
+      "path": "supabase/migrations/20261012085433_food_worker_scheduler.sql",
+      "functions": [
+        "nexora-food-send-notification",
+        "nexora-food-process-deletion"
+      ],
+      "reason": "Recorded food notification/deletion worker dependencies; their source and live deployment are not established by this repository."
+    },
+    {
+      "path": "supabase/migrations/20261015055952_nexora_job_web_push_notifications.sql",
+      "functions": [
+        "nexora-job-push"
+      ],
+      "reason": "Recorded recruitment push worker dependency; its source and live deployment are not established by this repository."
+    },
+    {
+      "path": "supabase/migrations/20261024030349_studioflow_customer_engagement.sql",
+      "functions": [
+        "studioflow-customer-services"
+      ],
+      "reason": "Recorded legacy customer engagement worker dependency; its source and live deployment are not established by this repository."
+    }
   ]
 }

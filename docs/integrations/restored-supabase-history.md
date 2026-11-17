@@ -38,3 +38,21 @@ this recovery separate from a fresh-database installation or seed workflow.
 - The existing 13 applied migration files and 26 local-only migrations are unchanged.
 - No remote migration execution was performed: the connected Supabase account
   cannot access this project. Live dry-run and full historical replay are unverified.
+
+## Historical worker references in CI
+
+Both initial failing CI jobs stopped in `verify-edge-functions.mjs`. Restored SQL
+records four worker dependencies absent from this source tree: food notification,
+food deletion, recruitment push, and the legacy StudioFlow customer engagement
+worker. This inventory is not evidence that those workers are deployed or healthy.
+
+`historical_edge_references` explicitly records their three original migration
+paths and endpoint names. The Edge guard accepts a reference only in that exact
+applied file, with its original SHA-256 checksum. Changed historical SQL, new
+migrations, browser invocations, active server callers and unlisted names still
+require real source. No function source checks, authentication checks or CI jobs
+are disabled. The migration SQL itself remains unchanged.
+
+These four worker deployments remain an independent release verification item,
+alongside the 26 unmatched local versions. CI passing does not establish live
+notification delivery or database deployment readiness.
