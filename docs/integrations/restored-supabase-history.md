@@ -14,10 +14,15 @@ The companion JSON records restored-file hashes and all 167 applied versions.
 ## Release boundary
 
 This restores missing history; it does not prove that production is ready to
-apply further migrations. The export also exposes 26 existing local versions
-that are not recorded remotely. Several are alternate timestamps for applied
-migrations, while others require independent schema review. Their full list is
-in `local_versions_not_in_export` in the companion JSON. No version is marked
+apply further migrations. The export originally exposed 26 local versions not recorded remotely. Eight
+proven aliases have now been removed from the active migration directory; all
+their executable statements match already-applied canonical SQL, including
+quoted values and function bodies. Test/document references use the canonical
+versions. Their mappings and prior hashes are in `reconciled_aliases`.
+
+The remaining 18 versions contain genuine differences and are listed in
+`local_versions_not_in_export`. Their statement-level comparison is recorded in
+`migration-drift-review.json`. They must not be blindly replayed or marked applied. No version is marked
 applied or reverted and no history repair, reset, or database change is made.
 
 Before applying anything, compare the current remote migration list again,
@@ -35,7 +40,8 @@ this recovery separate from a fresh-database installation or seed workflow.
 - All 167 exported applied versions have exactly one local migration file.
 - All 154 restored files preserve the exported statement text and match the
   SHA-256 hashes recorded in the companion JSON.
-- The existing 13 applied migration files and 26 local-only migrations are unchanged.
+- The existing 13 applied files and all 154 restored applied files are unchanged.
+- Eight unrecorded duplicate aliases are removed; the remaining 18 SQL files are unchanged.
 - No remote migration execution was performed: the connected Supabase account
   cannot access this project. Live dry-run and full historical replay are unverified.
 
@@ -54,5 +60,19 @@ require real source. No function source checks, authentication checks or CI jobs
 are disabled. The migration SQL itself remains unchanged.
 
 These four worker deployments remain an independent release verification item,
-alongside the 26 unmatched local versions. CI passing does not establish live
+alongside the remaining 18 unmatched local versions. CI passing does not establish live
 notification delivery or database deployment readiness.
+
+## Live catalog preflight
+
+`studioflow-live-schema-preflight.sql` is a single read-only SELECT targeting
+116 function names and 78 relation names referenced by the remaining migrations.
+It returns one JSON result: current migration versions, relevant function
+definitions/overloads, columns, constraints, RLS policies, grants, indexes,
+triggers, and missing objects. It does not read customer rows or Vault secrets
+and does not repair migration history or change the schema.
+
+Run it in the project SQL editor and export the result for comparison. This
+resolves whether local SQL is genuinely absent, applied outside recorded history,
+or would replace a newer live contract. The connected account still cannot
+read this project's catalog; production readiness remains unverified.

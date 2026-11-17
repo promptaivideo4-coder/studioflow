@@ -104,14 +104,14 @@ await db.exec(readFileSync('supabase/migrations/202611050001_booking_multi_servi
 // NEXORA SALONOS landing data layer: schema, published seed content and the
 // shared lead rate-limit counters. The landing page reads these tables with
 // the publishable browser key, so their RLS state is verified here as well.
-await db.exec(readFileSync('supabase/migrations/202611070001_nexora_salon_landing_database.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261107070508_nexora_salon_landing_database.sql','utf8'));
 await db.exec(readFileSync('supabase/migrations/202611070002_nexora_salon_landing_seed.sql','utf8'));
-await db.exec(readFileSync('supabase/migrations/202611070003_nexora_salon_landing_rate_limits.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261107071230_nexora_salon_landing_rate_limits.sql','utf8'));
 // Demo-request operations: idempotency, CRM delivery state, retention, the
 // audit trail and the published privacy notice link.
-await db.exec(readFileSync('supabase/migrations/202611070004_nexora_demo_lead_operations.sql','utf8'));
-await db.exec(readFileSync('supabase/migrations/202611070005_nexora_demo_lead_retention_default.sql','utf8'));
-await db.exec(readFileSync('supabase/migrations/202611070006_nexora_landing_privacy_link.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261107082654_nexora_demo_lead_operations.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261107082952_nexora_demo_lead_retention_default.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261107083327_nexora_landing_privacy_link.sql','utf8'));
 // Finish the selected pre-Template-12 migrations before the reconciled
 // Template 12 version and its branch-specific extension.
 await db.exec(readFileSync('supabase/migrations/20261113120946_template12_iron_ink.sql','utf8'));
@@ -120,7 +120,7 @@ await db.exec(readFileSync('supabase/migrations/20261113120947_multibranch_templ
 // rename migration before the live-catalog scan. The limiter is intentionally
 // server-only (service_role grant only) and is not a browser-facing RPC.
 await db.exec(readFileSync('supabase/migrations/20261115132100_studioflow_whatsapp_test_booking_api.sql','utf8'));
-await db.exec(readFileSync('supabase/migrations/20261115133000_private_whatsapp_test_rate_limit.sql','utf8'));
+await db.exec(readFileSync('supabase/migrations/20261115145202_private_whatsapp_test_rate_limit.sql','utf8'));
 const rpcs=clientRpc(src);
 const froms=[...src.matchAll(/\.from\(\s*['"\`]([A-Za-z0-9_-]+)['"\`]/g)].map(m=>m[1]);
 const tables=froms.filter(n=>!n.includes('-'));

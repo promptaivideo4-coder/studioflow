@@ -5,7 +5,7 @@ const source = readFileSync('supabase/functions/studioflow-whatsapp-booking/inde
 const migration = readFileSync('supabase/migrations/20261115132100_studioflow_whatsapp_test_booking_api.sql', 'utf8');
 const spec = JSON.parse(readFileSync('docs/integrations/nexora-whatsapp-booking.openapi.json', 'utf8'));
 const docs = readFileSync('docs/integrations/NEXORA-WHATSAPP-BOOKING-TEST.md', 'utf8');
-const renameMigration = readFileSync('supabase/migrations/20261115133000_private_whatsapp_test_rate_limit.sql', 'utf8');
+const renameMigration = readFileSync('supabase/migrations/20261115145202_private_whatsapp_test_rate_limit.sql', 'utf8');
 
 assert.match(source, /NEXORA_TAWK_BOOKING_API_KEY/);
 assert.ok(source.includes("req.headers.get('authorization')"));
