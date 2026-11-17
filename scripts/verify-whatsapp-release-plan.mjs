@@ -32,7 +32,7 @@ assert(history.live_catalog_evidence.captured_at);
 const workflow=readFileSync('.github/workflows/production.yml','utf8');
 const edgeStep=workflow.split('- name: Deploy reviewed WhatsApp Edge Functions')[1]?.split('\n  deploy:')[0];
 assert(edgeStep,'Missing Edge deployment step after approved migrations');
-assert(edgeStep.includes("github.event_name == 'workflow_dispatch' && inputs.apply == true"));
+assert(edgeStep.includes("github.event_name == 'workflow_dispatch' && inputs.release_mode == 'apply_and_deploy'"));
 assert(edgeStep.includes('--remote="$SUPABASE_PROJECT_REF" --use-api'));
 assert(!edgeStep.includes('--no-verify-jwt') && !edgeStep.includes('--prune'));
 assert(workflow.includes('$SUPABASE_PROJECT_REF" != "zilwgiuiygqqardzutxi"'));

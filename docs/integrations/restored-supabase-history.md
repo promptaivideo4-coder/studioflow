@@ -66,7 +66,7 @@ runs its migration dry-run after this migration-changing PR is merged; that
 workflow does not automatically apply migrations or deploy on that push. An
 independently configured Supabase GitHub integration may still apply migrations
 according to its own project settings, which this session could not inspect. Actual apply and
-production deployment require its explicit `apply=true` release mode. That mode
+production deployment require its explicit `release_mode=apply_and_deploy` release mode. That mode
 now deploys the five reviewed WhatsApp/payment/email Edge Functions after the DB
 apply succeeds, before Vercel deployment. It uses per-function JWT settings,
 never prunes other functions and checks the target project reference. The QA
@@ -79,3 +79,12 @@ or use `--include-all` to force old source into production. After the dry-run
 shows only the two pending migrations, apply through the normal release process,
 deploy the required Edge Functions, and verify real Meta sender/booking/payment
 behavior. CI passing and merging this PR do not establish a live WhatsApp connection.
+
+## One release selection
+
+Production now has a single `release_mode` dropdown instead of two booleans.
+`dry_run` validates migrations without applying or deploying anything.
+`apply_and_deploy` runs the dry-run, applies pending SQL, deploys the reviewed
+Edge Functions, then deploys the website. `deploy_only` deploys only the website.
+The default is `dry_run`; invalid modes fail validation before a release job.
+The new selector appears on main only after this PR is merged.
