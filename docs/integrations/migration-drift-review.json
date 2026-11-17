@@ -290,5 +290,14 @@
         ]
       ]
     }
-  ]
+  ],
+  "live_catalog_review": {
+    "captured_at": "2026-11-17T06:05:08.989382+00:00",
+    "remaining_unclassified": 0,
+    "applied_aliases_removed": 8,
+    "deferred_feature_files": 15,
+    "superseded_test_draft_files": 1,
+    "pending_additive_runtime_migrations": 2,
+    "notes": "Classification is complete. Production dry-run, application of the two pending migrations, and real provider integration checks are separate release steps."
+  }
 }

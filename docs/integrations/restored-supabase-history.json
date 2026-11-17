@@ -1097,24 +1097,8 @@
     "20261116085953"
   ],
   "local_versions_not_in_export": [
-    "202610290001_vogue_noir_academy_city.sql",
-    "202610300002_prism_chroma_template_10.sql",
-    "202610300004_multibranch_support.sql",
-    "202610300005_iron_ink_social_videos.sql",
-    "202611020001_ziya_promotions_and_loyalty.sql",
-    "202611030001_aura_template03_content.sql",
-    "202611030002_aura_unisex_promotions.sql",
-    "202611030003_template15_keshkraft.sql",
-    "202611050001_booking_multi_services.sql",
-    "202611060001_studioflow_public_access_hardening.sql",
-    "202611070002_nexora_salon_landing_seed.sql",
-    "202611070007_nexora_public_visibility_reconcile.sql",
-    "202611070008_remove_nexora_promotion_studio.sql",
-    "202611070009_remove_nexora_product_preview.sql",
-    "202611120001_studioflow_edge_rate_limits.sql",
-    "20261113120947_multibranch_template12_support.sql",
-    "20261115132100_studioflow_whatsapp_test_booking_api.sql",
-    "20261116100000_nexora_whatsapp_optional_profiles.sql"
+    "20261116100000_nexora_whatsapp_optional_profiles.sql",
+    "20261117061129_studioflow_shared_edge_rate_limits.sql"
   ],
   "historical_edge_references": [
     {
@@ -1196,6 +1180,869 @@
       "removed_file_sha256": "874b5ff090948f1202b4d69c25c655a2fc0c2fcfd00ea1e30b3efe06434ebebf",
       "equivalent_statement_count": 1,
       "verification": "PostgreSQL statement parsing and token comparison, including dollar-quoted function bodies; comments and formatting excluded, quoted values preserved."
+    }
+  ],
+  "retimestamped_unapplied_migrations": [
+    {
+      "old_file": "202611120001_studioflow_edge_rate_limits.sql",
+      "new_file": "20261117061129_studioflow_shared_edge_rate_limits.sql",
+      "sha256": "1a6959c61a16ebe7bb63bce6ec770719a95cbbccf88036324e23d6fc79d0acc8",
+      "reason": "Live export confirms the shared Edge rate-limit table and functions are absent. Existing booking-email handler requires this service-only additive store."
+    }
+  ],
+  "superseded_unapplied_migrations": [
+    {
+      "original_file": "20261115132100_studioflow_whatsapp_test_booking_api.sql",
+      "path": "supabase/pending-features/20261115132100_studioflow_whatsapp_test_booking_api.sql",
+      "sha256": "8515dd15e6fc1b4883d406d98073e91aadba90913d545b3c8dc0824b3fb4e0d5",
+      "canonical_files": [
+        "20261115131821_studioflow_whatsapp_test_booking_api.sql",
+        "20261115145202_private_whatsapp_test_rate_limit.sql"
+      ],
+      "reason": "Live private_whatsapp_test_rate_limit already exists, is service-only and uses the original studioflow_whatsapp_test_rate_limits table. Do not introduce a second counter table or overwrite the applied SECURITY DEFINER helper."
+    }
+  ],
+  "deferred_feature_migrations": [
+    {
+      "original_file": "202610290001_vogue_noir_academy_city.sql",
+      "path": "supabase/pending-features/202610290001_vogue_noir_academy_city.sql",
+      "sha256": "aced8d0754bd61c643e7999c952496dd78a2fa483b2493f2937d624389a22852",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202610290001_vogue_noir_academy_city.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.academy_enquire_with_city",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_academy_enquire_with_city",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "AlterTableStmt": 1,
+          "CreateFunctionStmt": 2,
+          "GrantStmt": 4
+        }
+      }
+    },
+    {
+      "original_file": "202610300002_prism_chroma_template_10.sql",
+      "path": "supabase/pending-features/202610300002_prism_chroma_template_10.sql",
+      "sha256": "6e596609246ccb73eb7d3cccbf27fbeb2f5392b3db65205ce119cb0ab7bfbd1e",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202610300002_prism_chroma_template_10.sql",
+        "functions": [
+          {
+            "name": "studioflow_prism_private.touch_updated_at",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_prism_private.site",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_prism_site",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_prism_private.enquire",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_prism_enquire",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_prism_private.newsletter",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_prism_newsletter",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_review_private.review_json",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_review_private.list_reviews",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_review_private.submit_review",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "public.studioflow_list_reviews",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_submit_review",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "studioflow_prism_private.moderate_review",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_prism_moderate_review",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.studioflow_offers",
+            "exists": false
+          },
+          {
+            "name": "public.studioflow_enquiries",
+            "exists": false
+          },
+          {
+            "name": "public.studioflow_newsletter_subscribers",
+            "exists": false
+          }
+        ],
+        "statement_kinds": {
+          "CreateSchemaStmt": 1,
+          "GrantStmt": 38,
+          "CreateFunctionStmt": 14,
+          "CreateStmt": 3,
+          "IndexStmt": 7,
+          "DropStmt": 13,
+          "CreateTrigStmt": 3,
+          "AlterTableStmt": 10,
+          "CreatePolicyStmt": 10,
+          "UpdateStmt": 1,
+          "DoStmt": 2,
+          "InsertStmt": 1,
+          "NotifyStmt": 1
+        }
+      }
+    },
+    {
+      "original_file": "202610300004_multibranch_support.sql",
+      "path": "supabase/pending-features/202610300004_multibranch_support.sql",
+      "sha256": "3936bc69df51f0dd71854f30f479b4dc470c20ecea93f01f0ab8d072e530fe69",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202610300004_multibranch_support.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.sync_branches_from_workspace",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "studioflow_private.branch_is_open",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.validate_studioflow_booking_branch",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "studioflow_private.branch_slots",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.availability",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "studioflow_android_private.slots",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "public.studioflow_public_branches",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_specialists",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "public.studioflow_branch_available_slots",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_android_slots",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_book",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_android_book",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_coupon_book",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_owner_walk_in",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_android_reschedule",
+            "status": "BODY_SAME"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.branches",
+            "exists": true
+          },
+          {
+            "name": "public.studioflow_branch_staff_members",
+            "exists": true
+          },
+          {
+            "name": "public.studioflow_staff_branch_schedules",
+            "exists": true
+          },
+          {
+            "name": "public.studioflow_branch_inventory",
+            "exists": true
+          }
+        ],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateStmt": 4,
+          "IndexStmt": 5,
+          "AlterTableStmt": 7,
+          "GrantStmt": 33,
+          "DropStmt": 11,
+          "CreatePolicyStmt": 9,
+          "InsertStmt": 1,
+          "CreateFunctionStmt": 15,
+          "CreateTrigStmt": 2,
+          "DoStmt": 2,
+          "UpdateStmt": 1
+        }
+      }
+    },
+    {
+      "original_file": "202610300005_iron_ink_social_videos.sql",
+      "path": "supabase/pending-features/202610300005_iron_ink_social_videos.sql",
+      "sha256": "f9e8e4e869e05fde0ca95cc767cbddfb527539482c96ffbf099a5cce31dfd54f",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202610300005_iron_ink_social_videos.sql",
+        "functions": [
+          {
+            "name": "public.salon_social_videos_touch",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.salon_social_videos_limit",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.get_salon_social_videos",
+            "status": "BODY_DIFF"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.salon_social_videos",
+            "exists": true
+          }
+        ],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateStmt": 1,
+          "IndexStmt": 2,
+          "CreateFunctionStmt": 3,
+          "GrantStmt": 7,
+          "DropStmt": 4,
+          "CreateTrigStmt": 2,
+          "AlterTableStmt": 1,
+          "CreatePolicyStmt": 2
+        }
+      }
+    },
+    {
+      "original_file": "202611020001_ziya_promotions_and_loyalty.sql",
+      "path": "supabase/pending-features/202611020001_ziya_promotions_and_loyalty.sql",
+      "sha256": "465e5502f33d4bda4fcfa8ef94caf1e4b4ebf561032d3ecac5580bf7d075afe0",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611020001_ziya_promotions_and_loyalty.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.ziya_touch_updated_at",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.ziya_normalize_promotion",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.can_manage_salon",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.can_view_salon_staff",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.seed_ziya_salon_defaults",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.auto_seed_ziya_on_account_save",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.coupon_quote",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.coupon_book",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.credit_booking_loyalty_points",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.reverse_booking_loyalty_points",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.ziya_booking_lifecycle_trg_fn",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.ziya_payment_refund_trg_fn",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.ziya_public_offers_and_loyalty",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_public_offers_and_loyalty",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.ziya_redeem_loyalty_reward",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_redeem_loyalty_reward",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_submit_enquiry",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_dashboard",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_save_promotion",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_delete_promotion",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_save_loyalty_settings",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_save_loyalty_reward",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_delete_loyalty_reward",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_adjust_points",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_ziya_admin_restore_demos",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.salon_promotions",
+            "exists": false
+          },
+          {
+            "name": "public.promotion_redemptions",
+            "exists": false
+          },
+          {
+            "name": "public.loyalty_program_settings",
+            "exists": false
+          },
+          {
+            "name": "public.loyalty_rewards",
+            "exists": true
+          },
+          {
+            "name": "public.loyalty_points_ledger",
+            "exists": false
+          }
+        ],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "UpdateStmt": 1,
+          "CreateFunctionStmt": 25,
+          "GrantStmt": 53,
+          "CreateStmt": 5,
+          "IndexStmt": 9,
+          "DropStmt": 23,
+          "CreateTrigStmt": 7,
+          "AlterTableStmt": 5,
+          "CreatePolicyStmt": 16,
+          "DoStmt": 2
+        }
+      }
+    },
+    {
+      "original_file": "202611030001_aura_template03_content.sql",
+      "path": "supabase/pending-features/202611030001_aura_template03_content.sql",
+      "sha256": "82b6d0c4d8917cd8c89740701fd0681eaf5d6ccafb54ac422377223cf9d52397",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611030001_aura_template03_content.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.aura_can_manage_salon",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_validate_template_section",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.get_aura_editable_salon_id",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.get_aura_template_sections",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_section_projection",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_sync_published_sections",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.studioflow_template_sections",
+            "exists": false
+          }
+        ],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateSchemaStmt": 1,
+          "GrantStmt": 18,
+          "CreateFunctionStmt": 6,
+          "CreateStmt": 1,
+          "IndexStmt": 2,
+          "AlterTableStmt": 2,
+          "DropStmt": 15,
+          "CreatePolicyStmt": 13,
+          "CreateTrigStmt": 2,
+          "UpdateStmt": 1,
+          "InsertStmt": 1,
+          "DoStmt": 1,
+          "NotifyStmt": 1
+        }
+      }
+    },
+    {
+      "original_file": "202611030002_aura_unisex_promotions.sql",
+      "path": "supabase/pending-features/202611030002_aura_unisex_promotions.sql",
+      "sha256": "6d000434169271dbbb7cef5fcceb4d5848023aceff144d1fe77eb2aea7f59555",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611030002_aura_unisex_promotions.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.aura_can_manage_salon",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_is_template03_salon",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_normalize_promotion",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_touch_updated_at",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_seed_demo_offers",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_auto_seed_on_account_save",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_public_offers",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_public_offers",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_offers",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_save_offer",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_delete_offer",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_toggle_offer",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_approve_demo",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_admin_restore_demos",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_coupon_quote",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_coupon_quote",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_aura_coupon_book",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_booking_amounts",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.aura_promotion_redemption_trg_fn",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [
+          {
+            "name": "public.salon_promotions",
+            "exists": false
+          },
+          {
+            "name": "public.promotion_redemptions",
+            "exists": false
+          },
+          {
+            "name": "public.aura_promotion_redemptions",
+            "exists": false
+          },
+          {
+            "name": "studioflow_private.aura_promotion_seeds",
+            "exists": false
+          }
+        ],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateSchemaStmt": 1,
+          "GrantStmt": 40,
+          "CreateFunctionStmt": 19,
+          "CreateStmt": 4,
+          "AlterTableStmt": 19,
+          "IndexStmt": 8,
+          "DropStmt": 13,
+          "CreateTrigStmt": 4,
+          "CreatePolicyStmt": 9,
+          "DoStmt": 3
+        }
+      }
+    },
+    {
+      "original_file": "202611030003_template15_keshkraft.sql",
+      "path": "supabase/pending-features/202611030003_template15_keshkraft.sql",
+      "sha256": "e4354a929ca8d5636645fae7712b91faf0b4a7eca9268458db856f615e9a759f",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611030003_template15_keshkraft.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.mens_service",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_mens_slots",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_mens_coupon_quote",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.mens_booking_guard",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_mens_book",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.mens_points_snapshot",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.mens_points",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_mens_rewards",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.mens_reward_guard",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateFunctionStmt": 9,
+          "GrantStmt": 13,
+          "DropStmt": 3,
+          "CreateTrigStmt": 3,
+          "IndexStmt": 1,
+          "InsertStmt": 1
+        }
+      }
+    },
+    {
+      "original_file": "202611050001_booking_multi_services.sql",
+      "path": "supabase/pending-features/202611050001_booking_multi_services.sql",
+      "sha256": "46afd6764a4f14fbf1b3c43f8ac654213d194bdd1f182521c523420cac382cfb",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611050001_booking_multi_services.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.booking_staff_profiles",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_booking_specialists",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_branch_specialists",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "studioflow_private.booking_bundle_window_allowed",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_android_private.slots_unbranched",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.branch_slots",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "studioflow_private.book_with_addons",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "public.studioflow_book",
+            "status": "BODY_SAME"
+          },
+          {
+            "name": "public.studioflow_mens_coupon_quote",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_private.mens_booking_guard",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.studioflow_mens_book",
+            "status": "MISSING"
+          }
+        ],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "CreateFunctionStmt": 11,
+          "GrantStmt": 17
+        }
+      }
+    },
+    {
+      "original_file": "202611060001_studioflow_public_access_hardening.sql",
+      "path": "supabase/pending-features/202611060001_studioflow_public_access_hardening.sql",
+      "sha256": "4f806401fab2a4b658f6e45fae39275f7f1e75b7a2dcefbcacbb615f4db86b2e",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611060001_studioflow_public_access_hardening.sql",
+        "functions": [],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "GrantStmt": 9,
+          "DropStmt": 6,
+          "CreatePolicyStmt": 3
+        }
+      }
+    },
+    {
+      "original_file": "202611070002_nexora_salon_landing_seed.sql",
+      "path": "supabase/pending-features/202611070002_nexora_salon_landing_seed.sql",
+      "sha256": "e4c4f9386530f8a531eeb10cc1c33c413d6307bfd3424eb7a53de7da7bae7d82",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611070002_nexora_salon_landing_seed.sql",
+        "functions": [],
+        "tables": [],
+        "statement_kinds": {
+          "InsertStmt": 11
+        }
+      }
+    },
+    {
+      "original_file": "202611070007_nexora_public_visibility_reconcile.sql",
+      "path": "supabase/pending-features/202611070007_nexora_public_visibility_reconcile.sql",
+      "sha256": "c42657297915f5007e99af13e52e79480013e430c117e48a8e2813ac262ada85",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611070007_nexora_public_visibility_reconcile.sql",
+        "functions": [],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "AlterTableStmt": 3,
+          "DropStmt": 6,
+          "CreatePolicyStmt": 3
+        }
+      }
+    },
+    {
+      "original_file": "202611070008_remove_nexora_promotion_studio.sql",
+      "path": "supabase/pending-features/202611070008_remove_nexora_promotion_studio.sql",
+      "sha256": "b5b50a229404fb129a099711528a680258e2c2ba8a04df39d3427e1ad9096a1b",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611070008_remove_nexora_promotion_studio.sql",
+        "functions": [],
+        "tables": [],
+        "statement_kinds": {
+          "DeleteStmt": 2
+        }
+      }
+    },
+    {
+      "original_file": "202611070009_remove_nexora_product_preview.sql",
+      "path": "supabase/pending-features/202611070009_remove_nexora_product_preview.sql",
+      "sha256": "ff7b19ce970764d4c6c9e312fb5b8071bc1cc4dee1ef979ea65331c813041f36",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "202611070009_remove_nexora_product_preview.sql",
+        "functions": [],
+        "tables": [],
+        "statement_kinds": {
+          "DeleteStmt": 2
+        }
+      }
+    },
+    {
+      "original_file": "20261113120947_multibranch_template12_support.sql",
+      "path": "supabase/pending-features/20261113120947_multibranch_template12_support.sql",
+      "sha256": "17eca63bbd3e8a42a9e802ff95dacd1a5fa314ba20b9ad1b568af2e6f090f921",
+      "reason": "Unapplied feature SQL outside this WhatsApp release; live catalog comparison shows missing dependencies or different/newer contracts. Preserve for a separate feature rollout.",
+      "live_comparison": {
+        "file": "20261113120947_multibranch_template12_support.sql",
+        "functions": [
+          {
+            "name": "studioflow_private.validate_ink_booking_branch",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.get_branch_available_slots",
+            "status": "MISSING"
+          },
+          {
+            "name": "studioflow_ink_private.validate_booking_write",
+            "status": "BODY_DIFF"
+          },
+          {
+            "name": "public.create_branch_booking",
+            "status": "MISSING"
+          },
+          {
+            "name": "public.get_template12_site",
+            "status": "BODY_DIFF"
+          }
+        ],
+        "tables": [],
+        "statement_kinds": {
+          "TransactionStmt": 2,
+          "AlterTableStmt": 11,
+          "DropStmt": 2,
+          "CreatePolicyStmt": 1,
+          "UpdateStmt": 1,
+          "IndexStmt": 5,
+          "CreateFunctionStmt": 5,
+          "GrantStmt": 8,
+          "CreateTrigStmt": 1
+        }
+      }
+    }
+  ],
+  "live_catalog_evidence": {
+    "captured_at": "2026-11-17T06:05:08.989382+00:00",
+    "export_sha256": "85dda055f2d7edc2e46eae2de83a0ff743b570829b8026de3e424ec05d415f2b",
+    "applied_versions": 167,
+    "functions": 391,
+    "relations": 273,
+    "assessment": "Read-only owner-supplied live catalog; not a live migration dry-run or deployment."
+  },
+  "release_pending_migrations": [
+    {
+      "file": "20261116100000_nexora_whatsapp_optional_profiles.sql",
+      "purpose": "Optional profile keys and service-role Vault helper grants; additive WhatsApp runtime repair."
+    },
+    {
+      "file": "20261117061129_studioflow_shared_edge_rate_limits.sql",
+      "purpose": "Service-only shared booking-email rate limiter; confirmed absent in the live export."
     }
   ]
 }

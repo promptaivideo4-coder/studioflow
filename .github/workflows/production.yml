@@ -115,6 +115,10 @@ jobs:
               exit 1
             fi
           done
+          if [[ "$SUPABASE_PROJECT_REF" != "zilwgiuiygqqardzutxi" ]]; then
+            echo "::error::SUPABASE_PROJECT_REF does not match this repository's reviewed StudioFlow project."
+            exit 1
+          fi
           echo "All three Supabase credential fields are present."
 
       - name: Link production Supabase project
@@ -138,6 +142,19 @@ jobs:
           SUPABASE_DB_PASSWORD: ${{ secrets.SUPABASE_DB_PASSWORD }}
           SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
         run: supabase db push --remote="$SUPABASE_PROJECT_REF" --password "$SUPABASE_DB_PASSWORD" --yes
+
+      - name: Deploy reviewed WhatsApp Edge Functions (manual apply=true only)
+        if: github.event_name == 'workflow_dispatch' && inputs.apply == true
+        env:
+          SUPABASE_ACCESS_TOKEN: ${{ secrets.SUPABASE_ACCESS_TOKEN }}
+          SUPABASE_PROJECT_REF: ${{ secrets.SUPABASE_PROJECT_REF }}
+        # Per-function JWT settings come from config.toml. Never globally
+        # disable JWT verification or prune unrelated shared-project functions.
+        run: >-
+          supabase functions deploy
+          nexora-whatsapp-connect nexora-whatsapp-webhook
+          studioflow-payments studioflow-whatsapp-booking studioflow-booking-emails
+          --remote="$SUPABASE_PROJECT_REF" --use-api
 
   deploy:
     name: Deploy to Vercel (production)
